@@ -1,0 +1,23 @@
+{
+  "name": "mining-host-troubleshooter-skill",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Installer and packaging metadata for the Mining Host Troubleshooter skill.",
+  "bin": {
+    "mining-host-troubleshooter-skill": "scripts/install-skill.mjs"
+  },
+  "files": [
+    "SKILL.md",
+    "README.md",
+    "README.zh-CN.md",
+    "agents",
+    "references",
+    "scripts",
+    "reports/.gitkeep",
+    "package.json"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}

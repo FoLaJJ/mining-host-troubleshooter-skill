@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# Local extracted artifacts (may contain sensitive content)
+*.txt
+report*.md
+artifacts-INC-*/
+evidence*.json
+reports/*
+!reports/.gitkeep
+
+# Keep repository docs
+!README.md
+!README.zh-CN.md

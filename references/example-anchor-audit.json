@@ -1,0 +1,22 @@
+{
+  "skip_parts": [
+    "reports",
+    "__pycache__",
+    "node_modules",
+    ".git"
+  ],
+  "allow": {
+    "scripts/install-skill.mjs": [
+      "windows_absolute_path"
+    ],
+    "scripts/collect_live_evidence.py": [
+      "private_ip"
+    ],
+    "references/skill-maintenance.md": [
+      "windows_absolute_path"
+    ],
+    "scripts/validate_case_bundle.py": [
+      "private_ip"
+    ]
+  }
+}

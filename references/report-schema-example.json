@@ -1,0 +1,135 @@
+﻿{
+  "case_id": "INC-2026-0001",
+  "host_id": "host-01",
+  "collector_version": "2026.03.06.3",
+  "timezone": "UTC",
+  "expected_workload": "Nightly renderer job approved for this host.",
+  "incident": {
+    "id": "INC-2026-0001",
+    "title": "Mining Host Security Investigation"
+  },
+  "generated_at": "2026-03-06T10:30:00+00:00",
+  "analyst": "team-security",
+  "host": {
+    "name": "host-01",
+    "ip": "<host-ip>",
+    "os": "Ubuntu 22.04",
+    "mining_mode": "gpu"
+  },
+  "summary": "Service masquerading and proxy behavior were observed; attribution remains partial.",
+  "evidence": [
+    {
+      "id": "E-001",
+      "source": "journalctl",
+      "observed_at": "2026-03-06T10:19:53+00:00",
+      "command": "journalctl -u <service-name>.service --no-pager | tail -n 50",
+      "command_hash": "<sha256-of-command>",
+      "artifact": "artifacts/E-001.txt",
+      "artifact_hash": "<sha256-of-artifact>",
+      "artifact_size_bytes": 2048
+    },
+    {
+      "id": "E-002",
+      "source": "persistence",
+      "observed_at": "2026-03-06T10:20:10+00:00",
+      "command": "cat /etc/systemd/system/<service-name>.service",
+      "command_hash": "<sha256-of-command>",
+      "artifact": "artifacts/E-002.txt",
+      "artifact_hash": "<sha256-of-artifact>",
+      "artifact_size_bytes": 1024
+    }
+  ],
+  "findings": [
+    {
+      "id": "F-001",
+      "statement": "A disguised service executed suspicious compute workload through a proxy endpoint.",
+      "claim_type": "observed_fact",
+      "hypothesis_id": "H-SVC-001",
+      "confidence": "high",
+      "confidence_reason": "Service metadata and process execution path agree across multiple evidence items.",
+      "evidence_ids": ["E-001", "E-002"]
+    },
+    {
+      "id": "F-002",
+      "statement": "The original external downloader IP may no longer be attributable from current host evidence.",
+      "claim_type": "attribution",
+      "hypothesis_id": "H-ATTR-001",
+      "confidence": "medium",
+      "confidence_reason": "Current host evidence supports historical contact but not full upstream ownership proof.",
+      "evidence_ids": ["E-001"]
+    }
+  ],
+  "timeline": [
+    {
+      "time": "2026-03-06T18:03:17+08:00",
+      "normalized_time_utc": "2026-03-06T10:03:17+00:00",
+      "event": "Service start observed in journal",
+      "source": "journalctl",
+      "evidence_ids": ["E-001"]
+    }
+  ],
+  "ip_traces": [
+    {
+      "ip": "<pivot-ip>",
+      "role": "suspected lateral pivot",
+      "trace_status": "traced",
+      "reason": "Correlated login and host-side evidence.",
+      "evidence_ids": ["E-001"]
+    },
+    {
+      "ip": "<historical-external-ip>",
+      "role": "suspected external downloader",
+      "trace_status": "untraceable",
+      "reason": "Historical note exists, but current case lacks sufficient upstream attribution evidence.",
+      "evidence_ids": ["E-001"]
+    }
+  ],
+  "log_integrity": [
+    {
+      "artifact": "/var/log/<auth-log>",
+      "status": "missing",
+      "reason": "File absent during evidence collection window.",
+      "evidence_ids": ["E-001"]
+    },
+    {
+      "artifact": "/var/log/<login-db>",
+      "status": "ok",
+      "reason": "Binary login record present and readable.",
+      "evidence_ids": ["E-001"]
+    }
+  ],
+  "actions": [
+    {
+      "time": "2026-03-06T10:40:00+00:00",
+      "action": "Disable suspicious service",
+      "risk_level": "medium",
+      "approval": "approved",
+      "result": "service disabled after approval"
+    }
+  ],
+  "scene_reconstruction": {
+    "generated_at_utc": "2026-03-06T10:31:00+00:00",
+    "collector_version": "2026.03.06.3",
+    "time_normalization": {
+      "report_timezone": "UTC",
+      "host_reported_timezone": "Asia/Shanghai",
+      "host_ntp_synchronized": "yes",
+      "event_time_field": "normalized_time_utc",
+      "log_time_source_priority": [
+        "explicit log timestamp",
+        "collector observed_at",
+        "artifact mtime"
+      ],
+      "clock_offset_assessment": "not_measured"
+    },
+    "auth_source_ips": ["<pivot-ip>"],
+    "listening_ports": ["22", "3307"],
+    "process_ioc_samples": ["python-service --proxy"],
+    "network_ioc_samples": ["stratum keyword match"],
+    "initial_access_review_samples": ["authorized_keys changed recently"],
+    "container_cloud_review_samples": ["docker image review required"]
+  },
+  "unknowns": [
+    "Exact initial credential theft path remains unconfirmed."
+  ]
+}

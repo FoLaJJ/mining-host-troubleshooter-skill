@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mining Host Troubleshooter"
+  short_description: "Safe mining host diagnostics with approval gates"
+  default_prompt: "Diagnose this mining host issue with read-only checks first, reconstruct scene and traceability from evidence, keep concise incident-responder tone, and ask before any state-changing command."
