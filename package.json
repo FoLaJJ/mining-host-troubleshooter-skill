@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "mining-host-troubleshooter-skill",
   "version": "0.1.0",
   "private": false,
@@ -9,6 +9,7 @@
   "files": [
     "SKILL.md",
     "README.md",
+    "README.en.md",
     "README.zh-CN.md",
     "agents",
     "references",

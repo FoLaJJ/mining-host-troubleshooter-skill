@@ -1,6 +1,6 @@
 ﻿# Mining Host Troubleshooter
 
-[English README](README.md)
+[English README](README.en.md)
 
 一套面向生产环境 Linux 主机的挖矿入侵排查与溯源技能，核心目标是：在尽量不破坏现场、不影响业务的前提下，完成只读调查、现场还原、证据归档和分层报告输出。
 
@@ -145,6 +145,69 @@ reports/
 ```
 
 这意味着你拿到的不只是“排查结果”，而是一整套可继续复核、可继续追溯、可直接交付的案件材料。
+
+## 实际产出示意
+
+下面这个示意来自一台已完成验证的案件包结构，公开仓库中已把主机标识替换为占位符。真实内部案件默认会保留 IP 等溯源字段，方便继续追查。
+
+### 1. 案件索引页会告诉你先看什么
+
+```md
+# Mining Host Investigation - 案件索引
+
+## 状态卡片
+- 事件 ID：`INC-20260306-xxxxxx`
+- 主机：`<HOST_IP>` (`<HOST_IP>`)
+- 证据项：`65` | 研判项：`5` | 时间线：`1`
+- 认证来源 IP：`1` | 监听端口：`3`
+
+## 最新研判
+- `F-AUTO-001` [观测事实/confirmed/medium] Authentication evidence includes 1 failed password event(s) across 1 source IP(s).
+- `F-AUTO-002` [观测事实/confirmed/high] Listening socket evidence includes ports: 22, 3307, 53.
+- `F-AUTO-003` [推断/confirmed/low] Initial-access and privileged-access review surfaces returned noteworthy lines for analyst review.
+
+## 建议阅读顺序
+1. 先看 `index.zh-CN.md`
+2. 再看 `management-summary.zh-CN.md` 或 `soc-summary.zh-CN.md`
+3. 最后进入 `report.zh-CN.md` 深挖证据链
+```
+
+### 2. 全量报告不是原始命令堆砌，而是结构化结论
+
+```md
+## 执行摘要
+- 证据项数量：`65`
+- 结论状态：`5` 条已确认，`0` 条待定
+- 日志完整性风险：`2` 项
+- 结论类型分布：观测事实 `2`，推断 `3`，归因 `0`
+- 置信度分布：🟢 高 `1`，🟡 中 `1`，🟠 低 `3`
+
+### ✅ F-AUTO-002
+- 表述：Listening socket evidence includes ports: 22, 3307, 53.
+- 结论类型：`观测事实`
+- 置信度：🟢 `高`
+- 状态：`已确认`
+- 证据链：[E-008](./report.zh-CN.md#evidence-e-008) / [artifact](artifacts/E-008.txt)
+```
+
+### 3. 证据索引可直接跳转到 artifact
+
+```md
+## 证据索引
+| 证据ID | 采集时间 | 命令预览 | 产物 |
+| --- | --- | --- | --- |
+| [E-001](#evidence-e-001) | 2026-03-06T13:05:43+00:00 | date -Is; timedatectl show ... | [E-001.txt](artifacts/E-001.txt) |
+| [E-008](#evidence-e-008) | 2026-03-06T13:05:46+00:00 | ss -tulpen | [E-008.txt](artifacts/E-008.txt) |
+| [E-012](#evidence-e-012) | 2026-03-06T13:05:47+00:00 | journalctl -u ssh --since ... | [E-012.txt](artifacts/E-012.txt) |
+```
+
+如果你把这套 skill 用在真实案件里，最终交付物通常会包含：
+
+- 一份案件索引，告诉不同角色先看什么。
+- 一份管理摘要，适合快速判断风险和审批动作。
+- 一份 SOC 摘要，适合值守和初筛。
+- 一份全量报告，适合技术复核和证据链追踪。
+- 一组可校验哈希的原始 artifact 和结构化 evidence JSON。
 
 ## 快速开始
 

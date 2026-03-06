@@ -1,66 +1,124 @@
 ﻿# Mining Host Troubleshooter
 
-[中文说明](README.zh-CN.md)
+[English README](README.en.md)
 
-A production-oriented skill for Linux mining-incident triage, scene reconstruction, and evidence-bound reporting.
+一套面向生产环境 Linux 主机的挖矿入侵排查与溯源技能，核心目标是：在尽量不破坏现场、不影响业务的前提下，完成只读调查、现场还原、证据归档和分层报告输出。
 
-This repository is designed for operators who need to investigate suspected mining abuse on Linux hosts without turning the investigation itself into a source of business impact.
+这个仓库适合以下场景：
 
-It is built around a strict operating model:
+- 你怀疑 Linux 主机被植入 CPU 挖矿、GPU 挖矿或混合型挖矿程序。
+- 你发现某个服务、启动项、容器或用户会话行为异常，但还不能确认是否为矿工伪装。
+- 你需要把调查过程做得更规范，避免一上来就误杀进程、删文件、改配置。
+- 你希望最终拿到的是可复核、可追踪、可继续扩展的案件包，而不是一堆零散命令输出。
 
-- read-only first
-- minimum disruption
-- explicit approval before any change
-- evidence before conclusion
-- no fabrication
-- traceability preserved in internal reports
+## 为什么值得安装
 
-## Why Install This Skill
+很多所谓的“矿机排查脚本”只能告诉你“这里有个高 CPU 进程”。
 
-Most "mining detection" playbooks stop at spotting a suspicious process. This skill goes further.
+这个 skill 的重点不是只做检测，而是帮助你把真正关键的问题回答清楚：
 
-It helps an agent or operator answer the questions that actually matter during an incident:
+- 这台主机到底是不是被入侵，还是只是合法高算力业务？
+- 可疑程序到底挂在哪一层：进程、systemd 服务、cron、容器、用户目录启动项，还是伪装路径？
+- 有没有持久化、重复登录、SSH 密钥投毒、PAM / sudoers / preload 等再进入面？
+- 能不能从当前证据里继续追 IP、矿池、钱包、基础设施，或者明确说明为什么追不动？
+- 日志是不是完整、部分缺失、已删除、疑似被篡改？
+- 哪些结论是已确认，哪些只能保持待定？
 
-- Is this host really compromised, or is it a legitimate high-compute workload?
-- If mining is present, where is it running: process, service, startup item, container, user session, or disguised path?
-- What persistence or re-entry surfaces exist?
-- Can source IPs, wallets, pools, or infrastructure be traced from the available evidence?
-- Are logs intact, missing, tampered, or only partially visible?
-- What can be said with confidence, and what must remain inconclusive?
+## 当前能力与成果
 
-## What It Can Do Today
+这套 skill 目前已经能覆盖大多数日常 Linux 挖矿入侵排查场景，尤其适合下面这些情况：
 
-This skill currently covers the majority of day-to-day Linux mining incident scenarios, especially for CPU mining, GPU mining, mixed rigs, disguised miner services, and suspicious Linux hosts that need controlled read-only triage.
+- CPU 挖矿、GPU 挖矿、混合矿机排查。
+- 矿工进程伪装成正常服务、正常进程名或业务路径。
+- 线上业务主机需要只读优先、低扰动调查。
+- 同一台主机反复出现可疑行为，需要做跨案件差异比对。
+- 需要给管理层、SOC、技术复核分别提供不同层次的报告。
 
-Key capabilities:
+核心能力包括：
 
-- Remote and local investigation workflows.
-- Multiple access modes: local shell, SSH private key, agent-loaded key, password auth, jump host, console access.
-- SSH trust bootstrap with known-hosts or pinned fingerprint verification.
-- Read-only evidence collection with timeout control and checkpoint recording.
-- Distro-aware triage for Ubuntu, Debian, Arch, and similar Linux systems.
-- Command-trust checks for missing commands, aliases, wrapped binaries, suspicious path drift, and partially trusted tooling.
-- Deeper host review for processes, services, startup items, shell history, user persistence, systemd, cron, preload, sudoers, PAM, container and cloud indicators.
-- False-positive control for legitimate high-compute workloads.
-- Timeline normalization with host/report timezone separation.
-- Confidence-gated conclusions: observed fact, inference, attribution.
-- Case-bundle export with artifacts, evidence, metadata, and layered reports.
-- Same-host baseline generation and application.
-- Cross-case comparison for repeat incidents on the same host.
+- 支持本机与远程主机排查。
+- 支持多种接入方式：本地 shell、SSH 私钥、SSH agent、账密、跳板机、控制台。
+- 远程接入时支持 `known_hosts` 或主机指纹 pinning 的信任引导。
+- 默认只读采集，带超时控制、检查点和证据链校验。
+- 兼容 Ubuntu、Debian、Arch 等 Linux 发行版差异。
+- 能处理命令缺失、alias 包装、路径漂移、可疑二进制、部分命令不可信等情况。
+- 深入检查进程、服务、启动项、shell 历史、用户目录持久化、cron、systemd、preload、sudoers、PAM、容器与云侧痕迹。
+- 对合法高算力任务有误报控制，不会因为 CPU / GPU 高占用就直接下入侵结论。
+- 支持时间标准化、结论置信度分级、观测事实 / 推断 / 归因分层。
+- 自动产出案件包、分层报告、同机基线和跨案件差异比对结果。
 
-## Investigation Outcomes
+## 调查顺序
 
-A successful run produces more than a pass/fail answer.
+这套 skill 不是“想到什么查什么”，而是按固定顺序推进，这样结论更稳、报告更能站得住：
 
-You get a structured case bundle that helps with:
+1. 先确认案件范围。
+2. 再确认目标主机身份、业务重要性和接入方式。
+3. 校验 SSH 信任链或本地执行信任前提。
+4. 检查权限范围、命令可信度和环境可见性。
+5. 执行低影响、只读优先的证据采集。
+6. 基于采集结果重建现场。
+7. 标准化时间线，保留不确定性。
+8. 复核持久化、启动项、服务、容器、云侧线索和初始访问痕迹。
+9. 校验证据链和案件包完整性。
+10. 导出管理摘要、SOC 摘要和全量报告。
+11. 只有存在同机历史干净样本时，才做同机基线比对。
+12. 有历史案件时，再做跨案件差异分析。
+13. 最后才讨论需要审批的处置动作。
 
-- scene reconstruction
-- traceability review
-- reporting to management and SOC
-- evidence handoff
-- later comparison against another incident on the same host
+## 设计原则
 
-Default output layout:
+这套 skill 很适合业务主机，原因就在于它的边界比较清晰：
+
+- 默认允许只读检查。
+- 默认禁止自动处置。
+- 所有改动类命令都必须先解释影响、风险和回滚，再等待明确审批。
+- 内部排查报告默认保留 IP 等溯源字段，避免把自己排查需要的信息遮掉。
+- 密码、令牌、私钥等敏感值依然会保护，不会写进报告。
+- 证据不够时明确写 `inconclusive`，不会强行讲故事。
+- 日志缺失、权限受限、工具可疑时，会降级而不是硬编结论。
+
+## 安装方式
+
+### 方式 1：直接从当前仓库安装
+
+安装到本地 Agents 运行环境：
+
+```bash
+node scripts/install-skill.mjs install --target agents --force
+```
+
+安装到其它常见目标：
+
+```bash
+node scripts/install-skill.mjs install --target codex --force
+node scripts/install-skill.mjs install --target cc-switch --force
+```
+
+安装到自定义技能目录：
+
+```bash
+node scripts/install-skill.mjs install --dest /path/to/skills --name mining-host-troubleshooter --force
+```
+
+查看默认目标路径：
+
+```bash
+node scripts/install-skill.mjs print-targets
+```
+
+### 方式 2：通过 `npx` 安装
+
+这个仓库已经按 npm 包的方式做了封装。发布到 npm 或私有 registry 之后，可以这样安装：
+
+```bash
+npx mining-host-troubleshooter-skill install --target agents
+```
+
+注意：只有真正发布之后，这条 `npx` 命令才可直接使用。
+
+## 一次排查会产出什么
+
+默认情况下，skill 会在当前工作目录下创建案件包，而不是把结果散落在环境目录中：
 
 ```text
 reports/
@@ -86,97 +144,74 @@ reports/
         `-- soc-summary.zh-CN.md
 ```
 
-The full report includes clickable evidence IDs, evidence detail blocks, artifact links, and layered conclusions instead of a flat text dump.
+这意味着你拿到的不只是“排查结果”，而是一整套可继续复核、可继续追溯、可直接交付的案件材料。
 
-## Investigation Order
+## 实际产出示意
 
-This skill follows a stable incident-triage order so results stay defensible:
+下面这个示意来自一台已完成验证的案件包结构，公开仓库中已把主机标识替换为占位符。真实内部案件默认会保留 IP 等溯源字段，方便继续追查。
 
-1. Confirm case scope.
-2. Confirm host identity and access path.
-3. Verify SSH trust or local execution trust assumptions.
-4. Verify privilege scope and command trust.
-5. Run low-impact read-only collection.
-6. Reconstruct the scene from collected evidence.
-7. Normalize time references and preserve uncertainty.
-8. Review persistence, startup surfaces, services, containers, cloud signals, and initial-access clues.
-9. Validate the case bundle and evidence chain.
-10. Export layered reports.
-11. Compare against a prior same-host clean baseline or prior case when available.
-12. Only then discuss approval-gated response actions.
+### 1. 案件索引页会告诉你先看什么
 
-## Design Principles
+```md
+# Mining Host Investigation - 案件索引
 
-This skill is opinionated in a way that matters for business hosts.
+## 状态卡片
+- 事件 ID：`INC-20260306-xxxxxx`
+- 主机：`<HOST_IP>` (`<HOST_IP>`)
+- 证据项：`65` | 研判项：`5` | 时间线：`1`
+- 认证来源 IP：`1` | 监听端口：`3`
 
-- It does not auto-kill, auto-delete, auto-disable, or auto-remediate.
-- It allows unrestricted read-only inspection by default.
-- It requires explicit approval before any state-changing command.
-- It keeps internal IPs and traceability fields visible by default.
-- It still protects secrets such as passwords, tokens, and private keys.
-- It does not invent attacker attribution when evidence is incomplete.
-- It degrades gracefully when logs are missing or privileges are limited.
+## 最新研判
+- `F-AUTO-001` [观测事实/confirmed/medium] Authentication evidence includes 1 failed password event(s) across 1 source IP(s).
+- `F-AUTO-002` [观测事实/confirmed/high] Listening socket evidence includes ports: 22, 3307, 53.
+- `F-AUTO-003` [推断/confirmed/low] Initial-access and privileged-access review surfaces returned noteworthy lines for analyst review.
 
-## Supported Access Modes
-
-Use the safest access path available:
-
-- local shell on the target host
-- SSH with a private key file
-- SSH with an agent-loaded key
-- SSH with username and password
-- SSH through a jump host
-- emergency or cloud console access
-
-For remote cases, the recommended order is:
-
-1. reuse an already trusted `known_hosts` entry if possible
-2. otherwise pin the host-key fingerprint out of band
-3. prefer key-based auth over password auth
-4. if password auth is unavoidable, use `--password-env` or `--prompt-password`
-
-## Installation
-
-### Option 1: Install from this repository
-
-Install into the local Agents runtime:
-
-```bash
-node scripts/install-skill.mjs install --target agents --force
+## 建议阅读顺序
+1. 先看 `index.zh-CN.md`
+2. 再看 `management-summary.zh-CN.md` 或 `soc-summary.zh-CN.md`
+3. 最后进入 `report.zh-CN.md` 深挖证据链
 ```
 
-Other supported targets:
+### 2. 全量报告不是原始命令堆砌，而是结构化结论
 
-```bash
-node scripts/install-skill.mjs install --target codex --force
-node scripts/install-skill.mjs install --target cc-switch --force
+```md
+## 执行摘要
+- 证据项数量：`65`
+- 结论状态：`5` 条已确认，`0` 条待定
+- 日志完整性风险：`2` 项
+- 结论类型分布：观测事实 `2`，推断 `3`，归因 `0`
+- 置信度分布：🟢 高 `1`，🟡 中 `1`，🟠 低 `3`
+
+### ✅ F-AUTO-002
+- 表述：Listening socket evidence includes ports: 22, 3307, 53.
+- 结论类型：`观测事实`
+- 置信度：🟢 `高`
+- 状态：`已确认`
+- 证据链：[E-008](./report.zh-CN.md#evidence-e-008) / [artifact](artifacts/E-008.txt)
 ```
 
-Install into a custom skill directory:
+### 3. 证据索引可直接跳转到 artifact
 
-```bash
-node scripts/install-skill.mjs install --dest /path/to/skills --name mining-host-troubleshooter --force
+```md
+## 证据索引
+| 证据ID | 采集时间 | 命令预览 | 产物 |
+| --- | --- | --- | --- |
+| [E-001](#evidence-e-001) | 2026-03-06T13:05:43+00:00 | date -Is; timedatectl show ... | [E-001.txt](artifacts/E-001.txt) |
+| [E-008](#evidence-e-008) | 2026-03-06T13:05:46+00:00 | ss -tulpen | [E-008.txt](artifacts/E-008.txt) |
+| [E-012](#evidence-e-012) | 2026-03-06T13:05:47+00:00 | journalctl -u ssh --since ... | [E-012.txt](artifacts/E-012.txt) |
 ```
 
-See available default targets:
+如果你把这套 skill 用在真实案件里，最终交付物通常会包含：
 
-```bash
-node scripts/install-skill.mjs print-targets
-```
+- 一份案件索引，告诉不同角色先看什么。
+- 一份管理摘要，适合快速判断风险和审批动作。
+- 一份 SOC 摘要，适合值守和初筛。
+- 一份全量报告，适合技术复核和证据链追踪。
+- 一组可校验哈希的原始 artifact 和结构化 evidence JSON。
 
-### Option 2: Install through `npx`
+## 快速开始
 
-This repository is packaged for npm-style installation. After publishing the package to npm or an internal registry, users can install with:
-
-```bash
-npx mining-host-troubleshooter-skill install --target agents
-```
-
-At the moment, `npx` installation is only valid after the package has actually been published.
-
-## Quick Start
-
-### Remote host with SSH key
+### 1. 远程主机：SSH 私钥方式
 
 ```bash
 python scripts/run_readonly_workflow.py \
@@ -188,11 +223,11 @@ python scripts/run_readonly_workflow.py \
   --os-hint "<OS_HINT>" \
   --mining-mode auto \
   --profile enterprise-self-audit \
-  --expected-workload "<EXPECTED_HIGH_COMPUTE_WORKLOAD_OR_EMPTY>" \
+  --expected-workload "<合法高算力业务说明或留空>" \
   --strict-report
 ```
 
-### Remote host with password auth
+### 2. 远程主机：账号密码方式
 
 ```bash
 python scripts/run_readonly_workflow.py \
@@ -204,11 +239,11 @@ python scripts/run_readonly_workflow.py \
   --os-hint "<OS_HINT>" \
   --mining-mode auto \
   --profile enterprise-self-audit \
-  --expected-workload "<EXPECTED_HIGH_COMPUTE_WORKLOAD_OR_EMPTY>" \
+  --expected-workload "<合法高算力业务说明或留空>" \
   --strict-report
 ```
 
-### Local host triage
+### 3. 本机只读排查
 
 ```bash
 python scripts/run_readonly_workflow.py \
@@ -218,63 +253,64 @@ python scripts/run_readonly_workflow.py \
   --os-hint "<OS_HINT>" \
   --mining-mode auto \
   --profile enterprise-self-audit \
-  --expected-workload "<EXPECTED_HIGH_COMPUTE_WORKLOAD_OR_EMPTY>" \
+  --expected-workload "<合法高算力业务说明或留空>" \
   --strict-report
 ```
 
-## Recommended Usage Sequence
+## 推荐使用顺序
 
-If you want the most useful investigation output, use the skill in this order:
+如果你想让这套 skill 发挥出完整效果，建议按下面顺序使用：
 
-1. Run `scripts/preflight_environment.py` if you need a quick environment check.
-2. Run `scripts/run_readonly_workflow.py` for the standard end-to-end read-only workflow.
-3. Review `reports/<case>/reports/index.md` or `index.zh-CN.md` first.
-4. Read `management-summary` or `soc-summary` depending on audience.
-5. Use the full report for evidence-backed conclusions and artifact drill-down.
-6. Apply a same-host baseline only after you have known-clean same-host history.
-7. Use cross-case diffing if the same host has repeated suspicious activity.
+1. 需要快速检查环境时，先跑 `scripts/preflight_environment.py`。
+2. 主要调查时，优先跑 `scripts/run_readonly_workflow.py`。
+3. 先看 `reports/<case>/reports/index.zh-CN.md`，确认案件包状态与报告入口。
+4. 给管理层看 `management-summary.zh-CN.md`，给值守或分析人员看 `soc-summary.zh-CN.md`。
+5. 做技术定性、复核证据链和追 artifact 时，再进入 `report.zh-CN.md`。
+6. 只有存在同机历史干净样本时，才接入 baseline。
+7. 如果这台主机以前也有案子，再跑跨案件差异比对。
 
-## Typical Use Cases
+## 典型场景
 
-- A production Linux server suddenly shows high CPU usage and strange outbound traffic.
-- A GPU worker reports hash-rate anomalies, rejected shares, or miner crashes, and you need to rule out compromise.
-- A host has suspicious services or cron entries that look like normal business components.
-- A cloud VM or container host may be abused through metadata credentials or image-level persistence.
-- Logs are missing and you need a fallback-driven read-only reconstruction path.
-- An incident repeats on the same host and you need a clean-vs-suspicious comparison.
+- 线上 Linux 主机 CPU 飙高，同时伴随异常外联。
+- GPU 矿机算力异常、拒绝率上升、miner 频繁崩溃，但需要先排除被入侵。
+- 某个服务名称看起来正常，实际启动路径或参数非常可疑。
+- 云主机或容器宿主机可能被滥用元数据凭据、恶意镜像或逃逸链路植入矿工。
+- 日志已经缺失，需要靠替代证据和只读路径尽量还原现场。
+- 同一台主机多次出现异常，需要做“旧案 vs 新案”的差异分析。
 
-## What Makes The Reports Useful
+## 报告为什么有价值
 
-This skill exports layered reports instead of a single oversized dump.
+这套 skill 输出的是分层报告，而不是一份又长又乱的原始命令拼接。
 
-- `report.md` / `report.zh-CN.md`: core full reports at the case root
-- `reports/index.*`: bundle landing pages and reading order
-- `reports/management-summary.*`: concise management-facing view
-- `reports/soc-summary.*`: triage-focused SOC view
+- `index.*`：案件入口页，告诉你先看什么。
+- `management-summary.*`：管理层摘要，适合快速决策。
+- `soc-summary.*`：SOC 分诊视图，适合值守和初筛。
+- `report.*`：全量报告，适合技术复核和取证细查。
 
-The full report distinguishes:
+全量报告会明确区分：
 
-- observed fact
-- inference
-- attribution
-- confidence and confidence reason
-- normalized timeline
-- traceable vs untraceable IPs
-- log-integrity caveats
-- approval-gated action records
+- 观测事实
+- 推断
+- 归因
+- 置信度与置信度原因
+- 标准化时间线
+- 已溯源与未溯源 IP
+- 日志完整性风险
+- 审批门控动作记录
+- 可点击跳转的证据 ID 与 artifact 链接
 
-## Baseline And Case Comparison
+## 同机基线与历史案件比对
 
-Baseline types should be kept separate:
+基线类型必须严格区分：
 
-- same-host clean baseline: used for suppression and drift comparison only on the same host
-- role-reference profile: used for human interpretation across similar hosts, but not valid for automatic same-host matching
+- 同机干净基线：只能用于同一台主机的历史对比、噪声抑制和漂移观察。
+- 同角色参考画像：只能给分析人员提供“这类主机通常长什么样”的参考，不能当作另一台主机的清白证明，也不能自动压制告警。
 
-A similar cloud controller, honeypot node, or sibling business VM may be useful as reference material, but it must not be merged into a clean baseline unless it is literally the same host across time.
+类似的云主机、蜜罐节点、主控端或被控端，只能作为参考画像素材，不能直接合并成“同机干净基线”。
 
-Generate a same-host clean baseline:
+注意：如果基线只来自单次虚拟机快照、单个案件，或者样本太少，它就只能算弱基线。弱基线绝不能作为“机器没问题”的证据，只能作为后续持续丰富的起点。正确做法是随着同一台主机的更多已知干净案件不断补充，让基线质量逐步提升。
 
-Note: a baseline is only same-host historical context. If it is built from a single VM snapshot or too few known-clean cases, treat it as weak and never as proof of benign state. Keep enriching it over time with additional known-clean cases from the same host. Similar hosts can still help you build a role-reference profile for analyst review, but they must not auto-clear findings on a different machine.
+生成同机干净基线：
 
 ```bash
 python scripts/generate_host_baseline.py \
@@ -282,7 +318,10 @@ python scripts/generate_host_baseline.py \
   --host-ip <HOST_IP>
 ```
 
-Apply a baseline during a new run:
+在新案件中应用基线：
+
+只有在你明确知道这是同一台主机的历史基线时，才应该传入 `--baseline`。如果你手里只有其他相似业务机的案件材料，请把它们当作人工参考，不要当成自动对照标准。
+
 
 ```bash
 python scripts/run_readonly_workflow.py \
@@ -297,7 +336,7 @@ python scripts/run_readonly_workflow.py \
   --strict-report
 ```
 
-Compare two case bundles:
+做跨案件差异比对：
 
 ```bash
 python scripts/compare_case_bundles.py \
@@ -305,33 +344,33 @@ python scripts/compare_case_bundles.py \
   --target-case reports/<newer-case>
 ```
 
-## Safety Boundaries
+## 安全边界
 
-Read-only inspection is allowed by default.
+默认允许的只有只读检查。
 
-The following categories always require explicit approval first:
+下面这些动作必须先得到明确审批：
 
-- killing processes
-- stopping services
-- deleting, truncating, or moving files
-- modifying startup items or configs
-- rebooting or interrupting business workloads
-- anything that may damage evidence or change host state
+- 杀进程
+- 停服务
+- 删除、截断、移动文件
+- 改配置、改启动项
+- 重启或中断业务
+- 任何可能破坏证据或改变主机状态的动作
 
-## Validation Before Publishing Or Reinstalling
+## 发布或重装前校验
 
 ```bash
 python C:/Users/admin/.codex/skills/.system/skill-creator/scripts/quick_validate.py D:/skills/mining-host-troubleshooter
 python scripts/audit_example_placeholders.py --strict
 ```
 
-## Repository Notes
+## 仓库说明
 
-- `README.md` and `README.zh-CN.md` are for humans evaluating or installing the skill.
-- `SKILL.md` is the agent operating contract.
-- `references/` holds detailed playbooks and fallback guidance.
-- `scripts/` holds the executable workflow and helper tooling.
+- `README.md` 和 `README.zh-CN.md` 是给人看的安装与评估文档。
+- `SKILL.md` 是给 agent 执行时遵循的核心契约。
+- `references/` 存放详细排查手册与降级说明。
+- `scripts/` 存放可执行工作流和辅助工具。
 
-If you want a skill that is usable on real Linux business hosts, keeps the investigation read-only by default, exports defensible case bundles, and avoids overclaiming, this one is already built for that job.
+如果你想要的是一套真正适合 Linux 业务主机、默认只读、注重现场还原、强调证据链、还能直接导出分层报告的挖矿排查技能，这个仓库已经具备比较完整的落地能力。
 
 
