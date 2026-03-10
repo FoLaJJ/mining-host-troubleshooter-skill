@@ -84,12 +84,12 @@ Follow this order unless the user gives a narrower scope:
 2. Preserve scene.
    - Avoid restarts, config edits, cleanup, and log rotation until read-only capture is complete.
 3. Trust bootstrap and verify environment trust.
-   - Confirm host-key trust first. Reject unknown host keys by default unless an explicit out-of-band fingerprint is provided. Then check distro family, package manager family, actual privilege level, command path trust, alias/function wrapping, and missing-command fallbacks.
+   - Confirm host-key trust first. Reject unknown host keys by default unless an explicit out-of-band fingerprint is provided. Then check distro family, package manager family, actual privilege level, command path trust, alias/function wrapping, and missing-command fallbacks such as `ss -> netstat -> lsof -> /proc/net` or `ps -> /proc`.
 4. Collect read-only evidence.
    - Prefer the bundled workflow scripts and case-bundle layout under `./reports/`.
    - If Python or bundled scripts are unavailable, switch to the manual shell-only fallback flow.
 5. Check log survivability.
-   - Detect missing logs, null-routing, suspicious links, and fallback to `wtmp`, `btmp`, systemd, cron, service metadata, and other surviving artifacts.
+   - Detect missing logs, null-routing, suspicious links, and fallback to `wtmp`, `btmp`, `lastlog`, journald/rsyslog configuration, service/timer metadata, package-manager history, shell traces such as `.wget-hsts` or `.lesshst`, `/proc/*/exe (deleted)`, and other surviving artifacts.
 6. Review execution and persistence.
    - Check processes, deleted-on-disk executables, service `ExecStart`, user startup items, shell histories, suspicious drop paths, network listeners, containers, preload hooks, PAM, sudoers, keys, modules, and eBPF where visible.
 7. Review initial access and cloud/container paths.

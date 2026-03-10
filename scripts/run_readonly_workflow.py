@@ -409,7 +409,7 @@ def main() -> int:
     parser.add_argument("--password-env", help="Read SSH password from env var name.")
     parser.add_argument("--prompt-password", action="store_true", help="Prompt securely for the SSH password instead of using command-line plaintext.")
     parser.add_argument("--allow-insecure-cli-password", action="store_true", help="Allow deprecated plaintext --password usage. Avoid unless no safer path exists.")
-    parser.add_argument("--timeout", type=int, default=30, help="Per-command timeout seconds for all probe execution paths.")
+    parser.add_argument("--timeout", type=int, default=15, help="Per-command timeout seconds for all probe execution paths. Default: 15.")
     parser.add_argument("--dry-run", action="store_true", help="Create case structure without running probes.")
     parser.add_argument("--profile", choices=["standard", "enterprise-self-audit"], default="standard", help="Workflow profile written into case metadata.")
     parser.add_argument("--skip-preflight", action="store_true", help="Skip local preflight check.")

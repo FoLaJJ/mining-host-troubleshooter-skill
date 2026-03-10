@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -15,25 +16,57 @@ from typing import Any
 
 
 TRUSTED_PREFIXES = ("/usr/bin/", "/bin/", "/usr/sbin/", "/sbin/", "/usr/local/bin/")
+TRUSTED_COMMAND_DIRS = ("/usr/bin", "/bin", "/usr/sbin", "/sbin", "/usr/local/bin")
 
 CRITICAL_COMMANDS: dict[str, list[str]] = {
     "shell_introspection": ["type", "command", "alias"],
     "service_control": ["systemctl", "service"],
     "process": ["ps", "top"],
-    "network_sockets": ["ss", "netstat"],
-    "route": ["ip", "route"],
-    "logs": ["journalctl", "dmesg"],
+    "network_sockets": ["ss", "netstat", "lsof"],
+    "route": ["ip", "route", "ifconfig"],
+    "logs": ["journalctl", "dmesg", "last", "lastlog"],
     "gpu_nvidia": ["nvidia-smi"],
     "gpu_amd": ["rocm-smi"],
     "cpu_temp": ["sensors"],
     "attrs": ["lsattr", "chattr"],
     "core_tools": ["uptime", "w"],
+    "file_metadata": ["stat", "readlink"],
+    "hashing": ["sha256sum", "shasum", "openssl", "python3"],
+    "downloads": ["curl", "wget"],
+}
+
+FALLBACK_CHAINS: dict[str, list[str]] = {
+    "shell_introspection": ["type", "command -v", "whereis"],
+    "service_control": ["systemctl", "service", "/etc/init.d", "rc scripts"],
+    "process": ["ps", "top", "/proc/<pid>/{cmdline,exe,status}"],
+    "network_sockets": ["ss", "netstat", "lsof", "/proc/net/{tcp,udp,unix}"],
+    "route": ["ip", "route", "ifconfig", "/proc/net/route"],
+    "logs": ["journalctl", "/var/log/{auth.log,secure,syslog,messages}", "last", "lastlog"],
+    "gpu_nvidia": ["nvidia-smi", "/proc/driver/nvidia", "lspci"],
+    "gpu_amd": ["rocm-smi", "lspci"],
+    "cpu_temp": ["sensors", "/sys/class/thermal", "lscpu"],
+    "attrs": ["lsattr", "stat", "package metadata"],
+    "core_tools": ["uptime", "w", "/proc/uptime"],
+    "file_metadata": ["stat", "readlink", "ls -l"],
+    "hashing": ["sha256sum", "shasum -a 256", "openssl dgst -sha256", "python hashlib"],
+    "downloads": ["curl", "wget", "shell traces", "package manager history"],
 }
 
 
 def run(cmd: list[str]) -> tuple[int, str, str]:
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+
+
+def resolve_command_path(command: str) -> tuple[str, str]:
+    path = shutil.which(command)
+    if path:
+        return path, "PATH"
+    for base in TRUSTED_COMMAND_DIRS:
+        candidate = os.path.join(base, command)
+        if os.path.exists(candidate) and os.access(candidate, os.X_OK):
+            return candidate, "trusted_scan"
+    return "", "missing"
 
 
 def detect_linux_release() -> dict[str, str]:
@@ -73,23 +106,29 @@ def package_owner(path: str, package_manager: str) -> str:
 
 
 def sha256(path: str) -> str:
-    if not shutil.which("sha256sum"):
-        return "sha256sum_unavailable"
-    code, out, _ = run(["sha256sum", path])
-    if code != 0 or not out:
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
         return "hash_failed"
-    return out.split()[0]
+
+
+def probe_shell() -> str:
+    return shutil.which("bash") or shutil.which("sh") or ""
 
 
 def check_alias_and_type(command: str) -> dict[str, Any]:
     result: dict[str, Any] = {"alias": "unknown", "type": "unknown"}
-    bash = shutil.which("bash")
-    if not bash:
-        result["alias"] = "bash_unavailable"
-        result["type"] = "bash_unavailable"
+    shell = probe_shell()
+    if not shell:
+        result["alias"] = "shell_unavailable"
+        result["type"] = "shell_unavailable"
         return result
 
-    code_alias, out_alias, err_alias = run([bash, "-lc", f"alias {command}"])
+    code_alias, out_alias, err_alias = run([shell, "-lc", f"alias {command}"])
     if code_alias == 0 and out_alias:
         result["alias"] = out_alias
     elif code_alias != 0:
@@ -97,17 +136,18 @@ def check_alias_and_type(command: str) -> dict[str, Any]:
     else:
         result["alias"] = err_alias or "not_aliased"
 
-    code_type, out_type, err_type = run([bash, "-lc", f"type -a {command}"])
+    code_type, out_type, err_type = run([shell, "-lc", f"type -a {command}"])
     result["type"] = out_type if code_type == 0 else (err_type or "not_found")
     return result
 
 
 def command_record(command: str, package_manager: str) -> dict[str, Any]:
-    path = shutil.which(command)
+    path, path_source = resolve_command_path(command)
     record: dict[str, Any] = {
         "command": command,
         "available": bool(path),
         "path": path or "missing",
+        "path_source": path_source,
     }
 
     alias_type = check_alias_and_type(command)
@@ -136,6 +176,8 @@ def command_record(command: str, package_manager: str) -> dict[str, Any]:
     suspicious = []
     if not record.get("trusted_prefix", False):
         suspicious.append("binary_outside_trusted_paths")
+    if path_source != "PATH":
+        suspicious.append("command_not_found_via_path")
     if record.get("group_writable"):
         suspicious.append("group_writable_binary")
     if record.get("world_writable"):
@@ -152,15 +194,18 @@ def command_record(command: str, package_manager: str) -> dict[str, Any]:
     return record
 
 
-def resolve_fallbacks(package_manager: str) -> dict[str, str]:
-    resolved: dict[str, str] = {}
+def resolve_fallbacks(package_manager: str) -> dict[str, Any]:
+    resolved: dict[str, Any] = {}
     for capability, candidates in CRITICAL_COMMANDS.items():
         picked = "missing"
         for cmd in candidates:
-            if shutil.which(cmd):
+            if resolve_command_path(cmd)[0]:
                 picked = cmd
                 break
-        resolved[capability] = picked
+        resolved[capability] = {
+            "selected": picked,
+            "candidates": FALLBACK_CHAINS.get(capability, candidates),
+        }
 
     if package_manager == "apt-get":
         resolved["pkg_install"] = "apt-get install"
@@ -216,7 +261,12 @@ def print_human(report: dict[str, Any]) -> None:
     if fallbacks:
         print("fallbacks:")
         for key, value in fallbacks.items():
-            print(f"  {key}: {value}")
+            if isinstance(value, dict):
+                selected = value.get("selected", "missing")
+                chain = " -> ".join(value.get("candidates", []))
+                print(f"  {key}: {selected} | chain: {chain}")
+            else:
+                print(f"  {key}: {value}")
 
     checks = report.get("command_checks", [])
     if checks:

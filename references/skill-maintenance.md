@@ -1,6 +1,6 @@
 # Skill Maintenance
 
-Maintain this repository as a Codex skill, not as an ad-hoc script folder.
+Maintain this repository as a reusable troubleshooting skill, not as an ad-hoc script folder.
 
 ## Required Workflow
 
@@ -13,7 +13,7 @@ Maintain this repository as a Codex skill, not as an ad-hoc script folder.
 ## Maintainer Checklist
 
 1. Read `C:/Users/admin/.codex/skills/.system/skill-creator/SKILL.md` before structural changes.
-2. If workflow or capabilities change, update both `README.md` and `README.zh-CN.md`.
+2. If workflow or capabilities change, update both `README.md` and `README.en.md`.
 3. If UI-facing behavior changes, verify `agents/openai.yaml` is still accurate.
 4. If install behavior changes, keep `package.json` and `scripts/install-skill.mjs` aligned.
 5. Run:

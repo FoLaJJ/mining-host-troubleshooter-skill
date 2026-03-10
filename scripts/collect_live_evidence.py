@@ -34,7 +34,175 @@ class Probe:
     command: str
 
 
-COLLECTOR_VERSION = "2026.03.06.3"
+class ParamikoRemoteSession:
+    def __init__(
+        self,
+        host: str,
+        username: str,
+        password: str,
+        port: int,
+        timeout: int,
+        known_hosts_files: list[str] | None = None,
+    ) -> None:
+        self.host = host
+        self.username = username
+        self.password = password
+        self.port = port
+        self.timeout = timeout
+        self.known_hosts_files = known_hosts_files or []
+        self.client: Any | None = None
+
+    def connect(self) -> None:
+        if paramiko is None:
+            raise RuntimeError("paramiko_not_available")
+        if self.client is not None:
+            return
+        client = paramiko.SSHClient()
+        client.load_system_host_keys()
+        for path in self.known_hosts_files:
+            try:
+                client.load_host_keys(path)
+            except OSError:
+                continue
+        client.set_missing_host_key_policy(paramiko.RejectPolicy())
+        client.connect(
+            hostname=self.host,
+            port=self.port,
+            username=self.username,
+            password=self.password,
+            timeout=self.timeout,
+            banner_timeout=self.timeout,
+            auth_timeout=self.timeout,
+            look_for_keys=False,
+            allow_agent=False,
+        )
+        self.client = client
+
+    def run(self, cmd: str) -> tuple[int, str, str]:
+        try:
+            self.connect()
+            assert self.client is not None
+            wrapped = f"bash -lc {shlex.quote(cmd)}"
+            stdin, stdout, stderr = self.client.exec_command(wrapped, timeout=self.timeout)
+            stdout.channel.settimeout(self.timeout)
+            stderr.channel.settimeout(self.timeout)
+            out = stdout.read().decode("utf-8", errors="replace")
+            err = stderr.read().decode("utf-8", errors="replace")
+            rc = stdout.channel.recv_exit_status()
+            return rc, out, err
+        except (socket.timeout, TimeoutError):
+            return timeout_result(self.timeout)
+        except Exception as exc:
+            return 1, "", f"paramiko_error: {exc}"
+
+    def close(self) -> None:
+        if self.client is not None:
+            self.client.close()
+            self.client = None
+
+
+COLLECTOR_VERSION = "2026.03.10.1"
+
+NETWORK_IDENTITY_CMD = (
+    "if command -v ip >/dev/null 2>&1; then "
+    "echo '## ip'; ip a; echo '## route'; ip route; "
+    "elif command -v ifconfig >/dev/null 2>&1; then "
+    "echo '## ifconfig'; ifconfig -a 2>/dev/null || true; "
+    "echo '## route'; (route -n 2>/dev/null || netstat -rn 2>/dev/null || true); "
+    "else echo 'network_identity_tools_missing'; fi; "
+    "echo '## proc_net_route'; cat /proc/net/route 2>/dev/null || true"
+)
+
+SOCKETS_CMD = (
+    "if command -v ss >/dev/null 2>&1; then "
+    "echo '## ss'; ss -antup; "
+    "elif command -v netstat >/dev/null 2>&1; then "
+    "echo '## netstat'; netstat -antup 2>/dev/null || netstat -antp 2>/dev/null || true; "
+    "elif command -v lsof >/dev/null 2>&1; then "
+    "echo '## lsof'; lsof -nPi 2>/dev/null || true; "
+    "else echo 'socket_tools_missing'; fi; "
+    "echo '## proc_tcp'; head -n 40 /proc/net/tcp 2>/dev/null || true; "
+    "echo '## proc_udp'; head -n 40 /proc/net/udp 2>/dev/null || true; "
+    "echo '## proc_unix'; head -n 40 /proc/net/unix 2>/dev/null || true"
+)
+
+PROCESS_TOP_CMD = (
+    "if command -v ps >/dev/null 2>&1; then "
+    "ps aux --sort=-%cpu | head -n 80; "
+    "else "
+    "echo 'ps_missing'; "
+    "for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$' | head -n 60); do "
+    "cmd=$(tr '\\0' ' ' < /proc/$pid/cmdline 2>/dev/null); "
+    "state=$(awk '/^State:/{print $2}' /proc/$pid/status 2>/dev/null); "
+    "[ -n \"$cmd\" ] && echo \"$pid|$state|$cmd\"; "
+    "done; "
+    "fi"
+)
+
+SSH_JOURNAL_CMD = (
+    "if command -v journalctl >/dev/null 2>&1; then "
+    "(journalctl -u ssh --no-pager 2>/dev/null || journalctl -u sshd --no-pager 2>/dev/null || true) | tail -n 300; "
+    "else echo 'journalctl_missing'; fi"
+)
+
+PRIMARY_AUTH_LOG_CMD = (
+    "grep -H -E 'Failed password|Accepted password|Invalid user|authentication failure' "
+    "/var/log/auth.log /var/log/auth.log.1 /var/log/auth.log.* /var/log/secure /var/log/secure-* "
+    "/var/log/syslog /var/log/messages 2>/dev/null | tail -n 300 || true"
+)
+
+AUTH_ARTIFACT_STAT_CMD = (
+    "ls -l /var/log/auth* /var/log/secure* /var/log/syslog* /var/log/messages* "
+    "/var/log/wtmp* /var/log/btmp* /var/log/lastlog /var/run/utmp 2>/dev/null || true; "
+    "stat -c '%n|%F|%s|%Y' /var/log/auth.log /var/log/auth.log.1 /var/log/secure /var/log/syslog "
+    "/var/log/messages /var/log/wtmp /var/log/btmp /var/log/lastlog /var/run/utmp 2>/dev/null || true"
+)
+
+RUNNING_SERVICES_CMD = (
+    "if command -v systemctl >/dev/null 2>&1; then "
+    "systemctl list-units --type=service --state=running --no-pager --no-legend 2>/dev/null | head -n 200; "
+    "elif command -v service >/dev/null 2>&1; then "
+    "service --status-all 2>/dev/null | head -n 200; "
+    "elif [ -d /etc/init.d ]; then ls -l /etc/init.d 2>/dev/null | head -n 200; "
+    "else echo 'service_metadata_tools_missing'; fi"
+)
+
+SERVICE_TIMER_CMD = (
+    "if command -v systemctl >/dev/null 2>&1; then "
+    "systemctl list-timers --all --no-pager 2>/dev/null | head -n 200; "
+    "else "
+    "find /etc/systemd/system /lib/systemd/system /usr/lib/systemd/system -maxdepth 2 -type f "
+    "\\( -name '*.timer' -o -name '*.service' \\) -printf '%TY-%Tm-%Td %TH:%TM %p\\n' 2>/dev/null | sort | head -n 240; "
+    "fi"
+)
+
+SHELL_TRACE_META_CMD = (
+    "find /root /home -xdev -maxdepth 3 "
+    "\\( -name '.bash_history' -o -name '.zsh_history' -o -name '.python_history' -o -name '.mysql_history' "
+    "-o -name '.wget-hsts' -o -name '.lesshst' -o -name '.viminfo' -o -name '.sqlite_history' \\) "
+    "-printf '%TY-%Tm-%Td %TH:%TM %u %s %p\\n' 2>/dev/null | sort"
+)
+
+SHELL_TRACE_GREP_CMD = (
+    "grep -HniE '(xmrig|miner|stratum|clash|autossh|frp|ngrok|curl .*[|] *sh|wget .*[|] *sh|base64 -d|"
+    "chmod \\+x .*(/tmp/|/var/tmp/|/dev/shm/)|/tmp/|/var/tmp/|/dev/shm/|nohup|setsid|screen -dm|"
+    "tmux (new|new-session)|systemctl enable|crontab |docker run .*--(privileged|pid=host|net=host)|kubectl exec)' "
+    "/root/.*history /home/*/.*history /root/.wget-hsts /home/*/.wget-hsts /root/.lesshst /home/*/.lesshst "
+    "/root/.viminfo /home/*/.viminfo 2>/dev/null | head -n 200 || true"
+)
+
+LOG_PIPELINE_CMD = (
+    "ps -ef 2>/dev/null | grep -E 'rsyslogd|syslog-ng|systemd-journald' | grep -v grep || true; "
+    "grep -RniE '(Storage=|Compress=|ForwardToSyslog=|ForwardToWall=|SystemMaxUse=|RuntimeMaxUse=)' "
+    "/etc/systemd/journald.conf /etc/systemd/journald.conf.d/*.conf /etc/rsyslog.conf /etc/rsyslog.d/*.conf "
+    "2>/dev/null || true"
+)
+
+PACKAGE_HISTORY_CMD = (
+    "grep -HniE '(install|upgrade|remove|xmrig|miner|cuda|nvidia|rocm|clash|autossh|docker|containerd|kubelet)' "
+    "/var/log/apt/history.log /var/log/apt/term.log /var/log/dpkg.log /var/log/dnf.log /var/log/dnf.rpm.log "
+    "/var/log/yum.log /var/log/pacman.log /var/log/zypper.log 2>/dev/null | tail -n 200 || true"
+)
 
 
 def command_hash(command: str) -> str:
@@ -69,23 +237,50 @@ BASE_PROBES = [
         "done; "
         "else echo 'sha256sum unavailable'; fi",
     ),
-    Probe("network", "ip a; ip route"),
-    Probe("network", "ss -antup || netstat -antup"),
-    Probe("process", "ps aux --sort=-%cpu | head -n 80"),
-    Probe("process", "ps aux | grep -Ei 'miner|xmrig|lolminer|trex|gminer|nbminer|clash|autossh|h32|h64|\\-zsh' | grep -v grep"),
-    Probe("auth", "journalctl -u ssh --no-pager | tail -n 300"),
-    Probe("auth", "grep -E 'Failed password|Accepted password|Invalid user|authentication failure' /var/log/auth.log /var/log/secure 2>/dev/null | tail -n 300 || true"),
+    Probe("network", NETWORK_IDENTITY_CMD),
+    Probe("network", SOCKETS_CMD),
+    Probe("process", PROCESS_TOP_CMD),
+    Probe(
+        "process",
+        "if command -v ps >/dev/null 2>&1; then "
+        "ps aux | grep -Ei 'miner|xmrig|lolminer|trex|gminer|nbminer|clash|autossh|h32|h64|\\-zsh' | grep -v grep; "
+        "else "
+        "for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do "
+        "cmd=$(tr '\\0' ' ' < /proc/$pid/cmdline 2>/dev/null); "
+        "echo \"$cmd\" | grep -Eqi 'miner|xmrig|lolminer|trex|gminer|nbminer|clash|autossh|h32|h64|\\-zsh' && echo \"$pid|$cmd\"; "
+        "done; "
+        "fi"
+    ),
+    Probe("auth", SSH_JOURNAL_CMD),
+    Probe("auth", PRIMARY_AUTH_LOG_CMD),
     Probe("auth", "journalctl -u ssh --no-pager | grep -Ei 'Failed password|Invalid user|authentication failure|Connection closed by authenticating user' | tail -n 300 || true"),
     Probe("auth", "last -Faiwx | head -n 120"),
     Probe("auth", "lastb -Faiwx | head -n 120"),
     Probe("auth", "lastlog | head -n 120"),
+    Probe("auth", AUTH_ARTIFACT_STAT_CMD),
     Probe("persistence", "find /etc/systemd/system /lib/systemd/system -maxdepth 2 -type f -name '*.service' -printf '%TY-%Tm-%Td %TH:%TM %p\\n' 2>/dev/null | sort"),
-    Probe("persistence", "systemctl list-unit-files --type=service 2>/dev/null | grep -Ei 'miner|xmrig|gminer|lolminer|trex|nbminer|python\\.service|clash|autossh|frp|ngrok|proxy|kawpow|stratum' || true"),
-    Probe("persistence", "systemctl list-units --type=service --all 2>/dev/null | grep -Ei 'miner|xmrig|gminer|lolminer|trex|nbminer|python\\.service|clash|autossh|frp|ngrok|proxy|kawpow|stratum' || true"),
-    Probe("persistence", "grep -RniE '(kawpow|xmrig|gminer|lolminer|trex|nbminer|stratum|51\\.195\\.|196\\.251\\.|7890|python2 --proxy|clash|autossh)' /etc/systemd/system /lib/systemd/system 2>/dev/null | head -n 120 || true"),
+    Probe(
+        "persistence",
+        "if command -v systemctl >/dev/null 2>&1; then "
+        "systemctl list-unit-files --type=service 2>/dev/null | grep -Ei 'miner|xmrig|gminer|lolminer|trex|nbminer|python\\.service|clash|autossh|frp|ngrok|proxy|kawpow|stratum' || true; "
+        "elif command -v service >/dev/null 2>&1; then "
+        "service --status-all 2>/dev/null | grep -Ei 'miner|xmrig|gminer|lolminer|trex|nbminer|python|clash|autossh|frp|ngrok|proxy|kawpow|stratum' || true; "
+        "else echo 'service_listing_tools_missing'; fi"
+    ),
+    Probe(
+        "persistence",
+        "if command -v systemctl >/dev/null 2>&1; then "
+        "systemctl list-units --type=service --all 2>/dev/null | grep -Ei 'miner|xmrig|gminer|lolminer|trex|nbminer|python\\.service|clash|autossh|frp|ngrok|proxy|kawpow|stratum' || true; "
+        "elif [ -d /etc/init.d ]; then "
+        "ls -l /etc/init.d 2>/dev/null | grep -Ei 'miner|xmrig|gminer|lolminer|trex|nbminer|python|clash|autossh|frp|ngrok|proxy|kawpow|stratum' || true; "
+        "else echo 'service_metadata_tools_missing'; fi"
+    ),
+    Probe("persistence", "grep -RniE '(kawpow|xmrig|gminer|lolminer|trex|nbminer|stratum|python([23])? .*--proxy|https?_proxy=|all_proxy=|clash|autossh)' /etc/systemd/system /lib/systemd/system 2>/dev/null | head -n 120 || true"),
     Probe("persistence", "find /etc/cron* -maxdepth 3 -type f -printf '%TY-%Tm-%Td %TH:%TM %p\\n' 2>/dev/null | sort"),
-    Probe("persistence", "grep -RniE '(kawpow|xmrig|gminer|lolminer|trex|nbminer|stratum|51\\.195\\.|196\\.251\\.|7890|clash|autossh|h32|h64|\\-zsh)' /etc/cron* 2>/dev/null | head -n 120 || true"),
+    Probe("persistence", "grep -RniE '(kawpow|xmrig|gminer|lolminer|trex|nbminer|stratum|https?_proxy=|all_proxy=|clash|autossh|h32|h64|\\-zsh)' /etc/cron* 2>/dev/null | head -n 120 || true"),
     Probe("persistence", "crontab -l 2>/dev/null || true"),
+    Probe("service", RUNNING_SERVICES_CMD),
+    Probe("service", SERVICE_TIMER_CMD),
     Probe("container", "docker ps --format '{{.ID}}\\t{{.Image}}\\t{{.Names}}\\t{{.Status}}' 2>/dev/null || true"),
     Probe(
         "container",
@@ -104,6 +299,9 @@ BASE_PROBES = [
         "elif [ -e \"$f\" ]; then sz=$(stat -c %s \"$f\" 2>/dev/null || echo -1); echo \"$f|file|$sz\"; "
         "else echo \"$f|missing|\"; fi; done",
     ),
+    Probe("log_integrity", "find /var/log -maxdepth 2 -type l -printf '%p -> %l\\n' 2>/dev/null | sort || true"),
+    Probe("log_integrity", LOG_PIPELINE_CMD),
+    Probe("log_integrity", PACKAGE_HISTORY_CMD),
 ]
 
 DEEP_READONLY_PROBES = [
@@ -141,10 +339,7 @@ DEEP_READONLY_PROBES = [
         "done",
     ),
     Probe("process", "ls -l /proc/*/exe 2>/dev/null | grep ' (deleted)$' || true"),
-    Probe(
-        "service",
-        "systemctl list-units --type=service --state=running --no-pager --no-legend 2>/dev/null | head -n 200 || true",
-    ),
+    Probe("service", RUNNING_SERVICES_CMD),
     Probe(
         "service",
         "systemctl list-units --type=service --state=running --no-legend --no-pager 2>/dev/null | awk '{print $1}' | head -n 40 | "
@@ -174,17 +369,8 @@ DEEP_READONLY_PROBES = [
         "grep -RniE '(xmrig|miner|stratum|clash|autossh|frp|ngrok|curl .*[|] *sh|wget .*[|] *sh|base64 -d|/tmp/|/var/tmp/|/dev/shm/|nohup|setsid|screen -dm|tmux (new|new-session)|systemctl enable|crontab )' "
         "/root/.bash* /root/.profile /root/.config/autostart /home/*/.bash* /home/*/.profile /home/*/.config/autostart /etc/rc.local 2>/dev/null | head -n 200 || true",
     ),
-    Probe(
-        "auth",
-        "find /root /home -xdev -maxdepth 3 "
-        "\\( -name '.bash_history' -o -name '.zsh_history' -o -name '.python_history' -o -name '.mysql_history' \\) "
-        "-printf '%TY-%Tm-%Td %TH:%TM %u %s %p\\n' 2>/dev/null | sort",
-    ),
-    Probe(
-        "auth",
-        "grep -HniE '(xmrig|miner|stratum|clash|autossh|frp|ngrok|curl .*[|] *sh|wget .*[|] *sh|base64 -d|chmod \\+x .*(/tmp/|/var/tmp/|/dev/shm/)|/tmp/|/var/tmp/|/dev/shm/|nohup|setsid|screen -dm|tmux (new|new-session)|systemctl enable|crontab |docker run .*--(privileged|pid=host|net=host)|kubectl exec)' "
-        "/root/.*history /home/*/.*history 2>/dev/null | head -n 200 || true",
-    ),
+    Probe("auth", SHELL_TRACE_META_CMD),
+    Probe("auth", SHELL_TRACE_GREP_CMD),
     Probe(
         "binary_drop",
         "find /tmp /var/tmp /dev/shm /run /root/.cache /root/.local /root/bin /home/*/.cache /home/*/.local /home/*/bin -maxdepth 4 -type f "
@@ -539,54 +725,6 @@ def run_remote(prefix: list[str], cmd: str, timeout: int) -> tuple[int, str, str
     return proc.returncode, proc.stdout, proc.stderr
 
 
-def run_remote_paramiko(
-    host: str,
-    username: str,
-    password: str,
-    port: int,
-    cmd: str,
-    timeout: int = 30,
-    known_hosts_files: list[str] | None = None,
-) -> tuple[int, str, str]:
-    if paramiko is None:
-        return 1, "", "paramiko_not_available"
-
-    client = paramiko.SSHClient()
-    client.load_system_host_keys()
-    for path in known_hosts_files or []:
-        try:
-            client.load_host_keys(path)
-        except OSError:
-            continue
-    client.set_missing_host_key_policy(paramiko.RejectPolicy())
-    try:
-        client.connect(
-            hostname=host,
-            port=port,
-            username=username,
-            password=password,
-            timeout=timeout,
-            banner_timeout=timeout,
-            auth_timeout=timeout,
-            look_for_keys=False,
-            allow_agent=False,
-        )
-        wrapped = f"bash -lc {shlex.quote(cmd)}"
-        stdin, stdout, stderr = client.exec_command(wrapped, timeout=timeout)
-        stdout.channel.settimeout(timeout)
-        stderr.channel.settimeout(timeout)
-        out = stdout.read().decode("utf-8", errors="replace")
-        err = stderr.read().decode("utf-8", errors="replace")
-        rc = stdout.channel.recv_exit_status()
-        return rc, out, err
-    except (socket.timeout, TimeoutError):
-        return timeout_result(timeout)
-    except Exception as exc:
-        return 1, "", f"paramiko_error: {exc}"
-    finally:
-        client.close()
-
-
 def parse_log_integrity(text: str, evidence_id: str) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     for line in text.splitlines():
@@ -671,106 +809,119 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, Any], list[str]]:
 
     trust_info = bootstrap_remote_trust(args)
     remote_prefix = build_ssh_prefix(args) if args.remote else []
-    if args.remote and args.password:
-        if "@" not in args.remote:
-            raise SystemExit("--remote must be in user@host format when using --password.")
-        username, host = args.remote.split("@", 1)
-        run_fn = lambda command: run_remote_paramiko(
-            host=host,
-            username=username,
-            password=args.password,
-            port=args.port or 22,
-            cmd=command,
-            timeout=args.timeout,
-            known_hosts_files=list(getattr(args, "trust_known_hosts_files", [])),
-        )
-    elif args.remote:
-        run_fn = lambda command: run_remote(remote_prefix, command, args.timeout)
-    else:
-        run_fn = lambda command: run_local(command, args.timeout)
-
-    for idx, probe in enumerate(BASE_PROBES, 1):
-        evidence_id = f"E-{idx:03d}"
-        start = now_utc()
-        if args.dry_run:
-            code, out, err = 0, "", ""
+    session: ParamikoRemoteSession | None = None
+    try:
+        if args.remote and args.password:
+            if "@" not in args.remote:
+                raise SystemExit("--remote must be in user@host format when using --password.")
+            username, host = args.remote.split("@", 1)
+            session = ParamikoRemoteSession(
+                host=host,
+                username=username,
+                password=args.password,
+                port=args.port or 22,
+                timeout=args.timeout,
+                known_hosts_files=list(getattr(args, "trust_known_hosts_files", [])),
+            )
+            run_fn = lambda command: session.run(command)
+        elif args.remote:
+            run_fn = lambda command: run_remote(remote_prefix, command, args.timeout)
         else:
-            code, out, err = run_fn(probe.command)
-        end = now_utc()
+            run_fn = lambda command: run_local(command, args.timeout)
 
-        artifact = artifacts_dir / f"{evidence_id}.txt"
-        timed_out = code == 124 or "probe_timeout_after_" in err
-        artifact.write_text(
-            f"# source={probe.source}\n# command={probe.command}\n# started={start}\n# ended={end}\n# exit_code={code}\n# timed_out={str(timed_out).lower()}\n\n[STDOUT]\n{out}\n\n[STDERR]\n{err}\n",
-            encoding="utf-8",
-            errors="replace",
-        )
+        if args.remote and not args.dry_run:
+            precheck_code, _, precheck_err = run_fn("true")
+            if precheck_code != 0:
+                raise SystemExit(
+                    "Remote command channel unavailable before collection. "
+                    f"reason={precheck_err or 'remote_precheck_failed'}"
+                )
 
-        evidence.append(
-            {
-                "id": evidence_id,
-                "source": probe.source,
-                "observed_at": end,
-                "command": probe.command,
-                "command_hash": command_hash(probe.command),
-                "artifact": str(artifact),
-                "artifact_hash": sha256_file(artifact),
-                "artifact_size_bytes": artifact.stat().st_size,
-                "timed_out": timed_out,
-            }
-        )
+        for idx, probe in enumerate(BASE_PROBES, 1):
+            evidence_id = f"E-{idx:03d}"
+            start = now_utc()
+            if args.dry_run:
+                code, out, err = 0, "", ""
+            else:
+                code, out, err = run_fn(probe.command)
+            end = now_utc()
 
-        if probe.source == "log_integrity":
-            log_integrity.extend(parse_log_integrity(out, evidence_id))
-
-        if timed_out:
-            unknowns.append(f"{evidence_id} timed out after {args.timeout}s; evidence may be partial.")
-        if code != 0 and probe.source in {"auth", "log_integrity"}:
-            unknowns.append(
-                f"{evidence_id} failed for {probe.source}; log-based attribution may be incomplete."
+            artifact = artifacts_dir / f"{evidence_id}.txt"
+            timed_out = code == 124 or "probe_timeout_after_" in err
+            artifact.write_text(
+                f"# source={probe.source}\n# command={probe.command}\n# started={start}\n# ended={end}\n# exit_code={code}\n# timed_out={str(timed_out).lower()}\n\n[STDOUT]\n{out}\n\n[STDERR]\n{err}\n",
+                encoding="utf-8",
+                errors="replace",
             )
 
-    host_name = args.host_name or (args.remote.split("@")[-1] if args.remote else platform.node() or "local-host")
-    host_ip = args.host_ip or ("unknown-remote" if args.remote else "127.0.0.1")
-    summary = (
-        "Auto-collected read-only evidence snapshot. Analyst review required. "
-        "No findings are asserted without explicit evidence linkage."
-    )
+            evidence.append(
+                {
+                    "id": evidence_id,
+                    "source": probe.source,
+                    "observed_at": end,
+                    "command": probe.command,
+                    "command_hash": command_hash(probe.command),
+                    "artifact": str(artifact),
+                    "artifact_hash": sha256_file(artifact),
+                    "artifact_size_bytes": artifact.stat().st_size,
+                    "timed_out": timed_out,
+                }
+            )
 
-    payload: dict[str, Any] = {
-        "case_id": incident_id,
-        "host_id": sanitize_name(host_ip if host_ip not in {"unknown-remote", "127.0.0.1"} else host_name),
-        "collector_version": COLLECTOR_VERSION,
-        "report_timezone_basis": "UTC",
-        "timezone": "UTC",
-        "timezone_semantics": "Report normalization basis only; not the host local timezone.",
-        "expected_workload": (args.expected_workload or "").strip(),
-        "remote_trust": trust_info,
-        "incident": {
-            "id": incident_id,
-            "title": args.title or "Mining Host Investigation",
-        },
-        "generated_at": now_utc(),
-        "analyst": args.analyst,
-        "host": {
-            "name": host_name,
-            "ip": host_ip,
-            "os": args.os_hint or "unknown",
-            "mining_mode": args.mining_mode,
-        },
-        "summary": summary,
-        "evidence": evidence,
-        "findings": [],
-        "timeline": [],
-        "ip_traces": [],
-        "log_integrity": log_integrity,
-        "actions": [],
-        "unknowns": sorted(set(unknowns + [
-            "No analyst findings yet. Add only evidence-backed findings.",
-            "Mark untraceable/unknown IPs explicitly; do not infer attribution without evidence.",
-        ])),
-    }
-    return payload, [str(artifacts_dir)]
+            if probe.source == "log_integrity":
+                log_integrity.extend(parse_log_integrity(out, evidence_id))
+
+            if timed_out:
+                unknowns.append(f"{evidence_id} timed out after {args.timeout}s; evidence may be partial.")
+            if code != 0 and probe.source in {"auth", "log_integrity"}:
+                unknowns.append(
+                    f"{evidence_id} failed for {probe.source}; log-based attribution may be incomplete."
+                )
+
+        host_name = args.host_name or (args.remote.split("@")[-1] if args.remote else platform.node() or "local-host")
+        host_ip = args.host_ip or ("unknown-remote" if args.remote else "127.0.0.1")
+        summary = (
+            "Auto-collected read-only evidence snapshot. Analyst review required. "
+            "No findings are asserted without explicit evidence linkage."
+        )
+
+        payload: dict[str, Any] = {
+            "case_id": incident_id,
+            "host_id": sanitize_name(host_ip if host_ip not in {"unknown-remote", "127.0.0.1"} else host_name),
+            "collector_version": COLLECTOR_VERSION,
+            "report_timezone_basis": "UTC",
+            "timezone": "UTC",
+            "timezone_semantics": "Report normalization basis only; not the host local timezone.",
+            "expected_workload": (args.expected_workload or "").strip(),
+            "remote_trust": trust_info,
+            "incident": {
+                "id": incident_id,
+                "title": args.title or "Mining Host Investigation",
+            },
+            "generated_at": now_utc(),
+            "analyst": args.analyst,
+            "host": {
+                "name": host_name,
+                "ip": host_ip,
+                "os": args.os_hint or "unknown",
+                "mining_mode": args.mining_mode,
+            },
+            "summary": summary,
+            "evidence": evidence,
+            "findings": [],
+            "timeline": [],
+            "ip_traces": [],
+            "log_integrity": log_integrity,
+            "actions": [],
+            "unknowns": sorted(set(unknowns + [
+                "No analyst findings yet. Add only evidence-backed findings.",
+                "Mark untraceable/unknown IPs explicitly; do not infer attribution without evidence.",
+            ])),
+        }
+        return payload, [str(artifacts_dir)]
+    finally:
+        if session is not None:
+            session.close()
 
 
 def parse_args() -> argparse.Namespace:
@@ -797,7 +948,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--password-env", help="Read SSH password from environment variable name.")
     parser.add_argument("--prompt-password", action="store_true", help="Prompt securely for the SSH password instead of using command-line plaintext.")
     parser.add_argument("--allow-insecure-cli-password", action="store_true", help="Allow deprecated plaintext --password usage. Avoid unless no safer path exists.")
-    parser.add_argument("--timeout", type=int, default=30, help="Per-command timeout seconds for local and remote probe execution.")
+    parser.add_argument("--timeout", type=int, default=15, help="Per-command timeout seconds for local and remote probe execution. Default: 15.")
     parser.add_argument("--dry-run", action="store_true", help="Generate structure without executing commands.")
     return parser.parse_args()
 

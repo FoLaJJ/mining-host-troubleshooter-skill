@@ -40,7 +40,9 @@ Key capabilities:
 - Read-only evidence collection with timeout control and checkpoint recording.
 - Distro-aware triage for Ubuntu, Debian, Arch, and similar Linux systems.
 - Command-trust checks for missing commands, aliases, wrapped binaries, suspicious path drift, and partially trusted tooling.
-- Deeper host review for processes, services, startup items, shell history, user persistence, systemd, cron, preload, sudoers, PAM, container and cloud indicators.
+- Read-only fallback chains when key commands are missing, such as `ss -> netstat -> lsof -> /proc/net` or `ps -> /proc`.
+- Deeper host review for processes, services, startup items, shell history, user persistence, systemd, timers, cron, preload, sudoers, PAM, container and cloud indicators.
+- Additional surviving-evidence coverage when primary logs are gone, including `wtmp`, `btmp`, `lastlog`, journald/rsyslog configuration, package-manager history, shell trace files, and `/proc/*/exe (deleted)`.
 - False-positive control for legitimate high-compute workloads.
 - Timeline normalization with host/report timezone separation.
 - Confidence-gated conclusions: observed fact, inference, attribution.
@@ -146,6 +148,22 @@ A typical deliverable therefore includes:
 - a full report for technical review and evidence tracing
 - hashed artifacts plus structured evidence JSON for later validation
 
+## What Still Works When Logs Are Gone
+
+If `auth.log`, `secure`, `syslog`, or journal history has been deleted, the workflow does not stop there.
+
+It keeps collecting read-only evidence from:
+
+- `wtmp`, `btmp`, and `lastlog`
+- journald / rsyslog / syslog-ng runtime and configuration state
+- service, timer, cron, and startup metadata
+- shell traces beyond `.bash_history`, such as `.wget-hsts`, `.lesshst`, `.viminfo`, and other history files
+- package-manager history logs
+- `/proc/*/exe (deleted)` and current runtime state
+- socket visibility through `netstat`, `lsof`, or `/proc/net/*` when `ss` is not available
+
+These sources do not replace complete logs, but they often let you bound the timeline, identify likely access paths, and explain why a conclusion must stay inconclusive.
+
 ## Investigation Order
 
 This skill follows a stable incident-triage order so results stay defensible:
@@ -174,6 +192,7 @@ This skill is opinionated in a way that matters for business hosts.
 - It still protects secrets such as passwords, tokens, and private keys.
 - It does not invent attacker attribution when evidence is incomplete.
 - It degrades gracefully when logs are missing or privileges are limited.
+- It avoids package changes, service restarts, forced rotation, or other state-changing shortcuts during first-pass triage.
 
 ## Supported Access Modes
 
@@ -379,14 +398,14 @@ The following categories always require explicit approval first:
 ## Validation Before Publishing Or Reinstalling
 
 ```bash
-python C:/Users/admin/.codex/skills/.system/skill-creator/scripts/quick_validate.py D:/skills/mining-host-troubleshooter
+python C:/Users/admin/.codex/skills/.system/skill-creator/scripts/quick_validate.py D:/skills/mining-host-troubleshooter-skill
 python scripts/audit_example_placeholders.py --strict
 ```
 
 ## Repository Notes
 
-- `README.md` and `README.zh-CN.md` are for humans evaluating or installing the skill.
-- `SKILL.md` is the agent operating contract.
+- `README.md` is the Chinese landing page and `README.en.md` is the English landing page.
+- `SKILL.md` is the runtime operating contract.
 - `references/` holds detailed playbooks and fallback guidance.
 - `scripts/` holds the executable workflow and helper tooling.
 

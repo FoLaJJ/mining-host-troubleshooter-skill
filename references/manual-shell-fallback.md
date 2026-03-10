@@ -102,6 +102,16 @@ systemctl list-units --type=service --all --no-pager 2>/dev/null | grep -Ei 'min
 find /etc/cron* -maxdepth 3 -type f -printf '%TY-%Tm-%Td %TH:%TM %p\n' 2>/dev/null | sort
 ```
 
+If the primary command is missing, pivot immediately instead of retrying the same tool:
+
+```bash
+ss -antup 2>/dev/null || netstat -antup 2>/dev/null || lsof -nPi 2>/dev/null || { head -n 30 /proc/net/tcp; head -n 30 /proc/net/udp; }
+ip a 2>/dev/null || ifconfig -a 2>/dev/null || cat /proc/net/route
+ps aux 2>/dev/null || for pid in $(ls /proc | grep -E '^[0-9]+$' | head -n 40); do tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null; done
+journalctl -u ssh --no-pager 2>/dev/null || grep -E 'Failed password|Accepted password|Invalid user|authentication failure' /var/log/auth.log /var/log/secure 2>/dev/null
+systemctl list-units --type=service --all --no-pager 2>/dev/null || service --status-all 2>/dev/null || ls -l /etc/init.d 2>/dev/null
+```
+
 4. Deleted logs or weak trust
 
 ```bash
@@ -109,6 +119,9 @@ last -Faiwx | head -n 80
 lastb -Faiwx | head -n 80
 lastlog | head -n 80
 find /etc/systemd/system /lib/systemd/system -maxdepth 2 -type f -name '*.service' -printf '%TY-%Tm-%Td %TH:%TM %p\n' 2>/dev/null | sort
+ps -ef 2>/dev/null | grep -E 'rsyslogd|syslog-ng|systemd-journald' | grep -v grep
+grep -RniE '(Storage=|ForwardToSyslog=|SystemMaxUse=|RuntimeMaxUse=)' /etc/systemd/journald.conf /etc/systemd/journald.conf.d/*.conf /etc/rsyslog.conf /etc/rsyslog.d/*.conf 2>/dev/null
+find /root /home -xdev -maxdepth 3 \( -name '.bash_history' -o -name '.zsh_history' -o -name '.wget-hsts' -o -name '.lesshst' -o -name '.viminfo' \) -printf '%TY-%Tm-%Td %TH:%TM %u %s %p\n' 2>/dev/null | sort
 ```
 
 5. GPU / CPU branch

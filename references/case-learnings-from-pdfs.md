@@ -70,7 +70,7 @@ Operational implications:
 1. Service path pattern: `/etc/systemd/system/<masqueraded-service>.service`
 2. Hidden process argument: `-zsh`
 3. Persistence file names: `bios.pid`, `cron.d`, `upd`, `run`
-4. Suspicious local proxy listener pattern: `*:7890`
+4. Suspicious local proxy listener pattern on a non-business forwarding port
 5. Mentioned external endpoint examples in records (treat as historical context, not active IOC): `<redacted-ip-1>:10400`, `<redacted-ip-2>`, `<redacted-ip-3>:12345`
 
 ## Usage Rule

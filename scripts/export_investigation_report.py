@@ -191,6 +191,13 @@ def count_by(items: list[dict[str, Any]], key: str, default: str = "unknown") ->
     return counts
 
 
+def safe_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def normalize_claim_type(value: str) -> str:
     text = value.strip().lower()
     if text in {"observed_fact", "fact", "observation"}:
@@ -208,28 +215,129 @@ def claim_type_label(value: str) -> str:
     }.get(normalize_claim_type(value), "Inference")
 
 
+def localize_auto_text_zh_cn(text: str) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return value
+
+    exact_map = {
+        "Auto-collected read-only evidence snapshot. Analyst review required.": "自动采集的只读证据快照，仍需分析人员复核。",
+        "Auto-collected read-only evidence snapshot. Analyst review required. No findings are asserted without explicit evidence linkage.": "自动采集的只读证据快照，仍需分析人员复核；任何结论都必须显式关联证据后才可成立。",
+        "Report normalization basis only; not the host local timezone.": "这里只表示报告统一归一化所使用的时区，不代表主机本地时区。",
+        "Mark untraceable/unknown IPs explicitly; do not infer attribution without evidence.": "请明确标记未溯源或状态未知的 IP；在缺乏证据时不要推导攻击者归因。",
+        "No analyst findings yet. Add only evidence-backed findings.": "当前尚无人工确认的结论；新增结论时仅允许写入有证据支撑的内容。",
+        "Auto-enrichment added evidence-bound timeline/findings/ip-trace hints. Analyst confirmation is required for final attribution.": "自动补充流程已生成受证据约束的时间线、研判和 IP 溯源提示；最终归因仍需人工确认。",
+        "Direct authentication artifacts are present, but upstream intrusion path is not yet confirmed.": "已观察到直接的认证类证据，但上游入侵路径尚未确认。",
+        "The listening-port list comes directly from socket inspection output.": "监听端口列表直接来自套接字检查结果。",
+        "The lines indicate review surfaces such as authorized_keys, sshd, PAM, sudoers, or preload entries, but maliciousness is not established automatically.": "这些命中行涉及 authorized_keys、sshd、PAM、sudoers 或 preload 等复核面，但不能自动判定其为恶意行为。",
+        "Container, kube, or cloud-related lines can indicate exposure paths, but they are not sufficient for attribution by themselves.": "容器、Kubernetes 或云侧相关命中可能提示暴露面，但单凭这些内容不足以完成归因。",
+        "Kernel module, eBPF, or taint-related output can indicate deeper persistence or may reflect benign platform state; dedicated forensic tooling is required for confirmation.": "内核模块、eBPF 或 taint 相关输出可能指向更深层的持久化，也可能只是平台正常状态；需要更专门的取证工具进一步确认。",
+        "Keyword-based IOC hits are suggestive, but do not independently prove malicious mining intent.": "基于关键字的 IOC 命中只具提示意义，不能单独证明存在恶意挖矿意图。",
+        "Observed in authentication evidence only; upstream attribution path is not established in this case.": "该 IP 目前仅在认证类证据中出现，本案尚未建立其上游归因路径。",
+        "yes": "是",
+        "no": "否",
+        "True": "是",
+        "False": "否",
+        "unknown": "未知",
+    }
+    if value in exact_map:
+        return exact_map[value]
+
+    pattern_rules: list[tuple[re.Pattern[str], Any]] = [
+        (
+            re.compile(
+                r"^Authentication evidence includes (\d+) failed password event\(s\) and (\d+) invalid-user event\(s\) across (\d+) source IP\(s\)\.$"
+            ),
+            lambda m: f"认证类证据显示：共出现 {m.group(1)} 次失败密码事件、{m.group(2)} 次无效用户事件，涉及 {m.group(3)} 个来源 IP。",
+        ),
+        (
+            re.compile(r"^Listening socket evidence includes ports: (.+)\.$"),
+            lambda m: f"监听套接字证据显示，当前涉及的端口包括：{m.group(1).replace(', ', '、')}。",
+        ),
+        (
+            re.compile(r"^Process IOC keyword probe returned (\d+) matching line\(s\)\.$"),
+            lambda m: f"进程 IOC 关键字探测返回了 {m.group(1)} 条命中记录。",
+        ),
+        (
+            re.compile(
+                r"^Initial-access and privileged-access review surfaces returned (\d+) noteworthy line\(s\) for analyst review\.$"
+            ),
+            lambda m: f"初始访问与高权限访问复核面共返回 {m.group(1)} 条值得分析人员复核的记录。",
+        ),
+        (
+            re.compile(r"^Container or cloud review surfaces returned (\d+) line\(s\) that may require analyst triage\.$"),
+            lambda m: f"容器或云侧复核面共返回 {m.group(1)} 条可能需要进一步分诊的记录。",
+        ),
+        (
+            re.compile(r"^Network IOC review found (\d+) line\(s\) containing pool, wallet, or deployment keywords\.$"),
+            lambda m: f"网络 IOC 复核发现了 {m.group(1)} 条包含矿池、钱包或投放关键字的记录。",
+        ),
+        (
+            re.compile(r"^Kernel or eBPF review surfaces returned (\d+) line\(s\) that may require deeper rootkit-oriented triage\.$"),
+            lambda m: f"内核或 eBPF 复核面共返回 {m.group(1)} 条可能需要更深入 rootkit 向分诊的记录。",
+        ),
+    ]
+    for pattern, renderer in pattern_rules:
+        match = pattern.match(value)
+        if match:
+            return renderer(match)
+    return value
+
+
+def zh_report_text(text: str, redact: bool) -> str:
+    return sanitize_report_text(localize_auto_text_zh_cn(text), redact)
+
+
+def finalize_zh_markdown(text: str) -> str:
+    text = text.replace("[artifact]", "[产物]")
+    text = text.replace("artifact missing", "产物缺失")
+    text = text.replace("review full report", "请查看中文全量报告")
+    text = re.sub(r"\(\+(\d+) more; 请查看中文全量报告\)", r"（另 \1 项；请查看中文全量报告）", text)
+    text = re.sub(r"\.\.\. \(\+(\d+) more\)", r"...（另 \1 项）", text)
+    return text
+
+
+def compact_evidence_chain_zh_cn(
+    evidence_ids: list[Any],
+    evid_idx: dict[str, dict[str, Any]],
+    case_dir: str | None,
+    limit: int,
+    base_dir: Path | None = None,
+) -> str:
+    rendered = compact_evidence_chain(evidence_ids, evid_idx, case_dir, limit=limit, base_dir=base_dir)
+    rendered = (
+        rendered.replace("[artifact]", "[产物]")
+        .replace("artifact missing", "产物缺失")
+        .replace("review full report", "请查看中文全量报告")
+    )
+    return re.sub(r"\(\+(\d+) more; 请查看中文全量报告\)", r"（另 \1 项；请查看中文全量报告）", rendered)
+
+
+def evidence_reference_list_zh_cn(
+    evidence_ids: list[Any],
+    evid_idx: dict[str, dict[str, Any]],
+    case_dir: str | None,
+    base_dir: Path | None = None,
+) -> str:
+    return (
+        evidence_reference_list(evidence_ids, evid_idx, case_dir, base_dir=base_dir)
+        .replace("[artifact]", "[产物]")
+        .replace("artifact missing", "产物缺失")
+    )
+
+
 def build_management_view(data: dict[str, Any], redact: bool, case_dir: str | None = None) -> str:
+    ctx = prepare_report_context(data, redact=redact, strict=False, case_dir=case_dir)
     incident = as_dict(data.get("incident"))
     host = as_dict(data.get("host"))
-    findings = [as_dict(x) for x in as_list(data.get("findings"))]
-    ip_traces = [as_dict(x) for x in as_list(data.get("ip_traces"))]
-    log_integrity = [as_dict(x) for x in as_list(data.get("log_integrity"))]
-    evidence_items = [as_dict(x) for x in as_list(data.get("evidence"))]
-    baseline_assessment = load_optional_case_json(case_dir, "meta/baseline_assessment.json")
+    findings = ctx["findings"]
+    evid_idx = ctx["evid_idx"]
+    baseline_assessment = ctx["baseline_assessment"]
+    posture_info = investigation_posture_payload(ctx)
 
     def maybe_redact(value: str) -> str:
         return sanitize_report_text(value, redact)
 
-    evid_idx = evidence_index(evidence_items)
-    confirmed_count, inconclusive_count = finding_status_counts(findings, evid_idx)
-    trace_counts = {"traced": 0, "untraceable": 0, "unknown": 0}
-    for item in ip_traces:
-        trace_counts[normalize_trace_status(str(item.get("trace_status", "")))] += 1
-    log_risk_count = sum(
-        1
-        for x in log_integrity
-        if str(x.get("status", "")).strip().lower() in {"missing", "tampered", "suspicious"}
-    )
     key_items = top_judgments(findings, evid_idx, limit=5)
     host_display = f"{host.get('name', 'unknown')} ({maybe_redact(str(host.get('ip', 'unknown')))})"
     lines = [anchor_tag("mgmt-top"), f"# {incident.get('title', 'Mining Host Investigation')} - Management Summary", ""]
@@ -242,20 +350,43 @@ def build_management_view(data: dict[str, Any], redact: bool, case_dir: str | No
         "> Executive view for rapid decision-making. Refer to the full report for detailed evidence and command provenance.",
         "",
         "## Quick Links",
+        "- [Management Conclusion](#mgmt-conclusion)",
         "- [Executive Snapshot](#mgmt-snapshot)",
+        "- [Risk Overview](#mgmt-risks)",
         "- [Priority Judgments](#mgmt-judgments)",
         "- [Management Caveat](#mgmt-caveat)",
         "",
+        anchor_tag("mgmt-conclusion"),
+        "## Management Conclusion",
+        f"- **Current Position:** {maybe_redact(posture_info['verdict'])}",
+        f"- **Confidence Posture:** {confidence_icon(posture_info['posture'])} `{posture_info['posture']}`",
+        f"- **Decision Boundary:** {maybe_redact(posture_info['boundary'])}",
+        f"- **Immediate Review Focus:** {maybe_redact(posture_info['focus'])}",
+        "- **Operational Constraint:** This case bundle reflects read-only collection only; no state-changing action was executed.",
+        "",
         anchor_tag("mgmt-snapshot"),
         "## Executive Snapshot",
-        f"- **Incident ID:** `{incident.get('id', 'unknown')}`",
-        f"- **Case ID:** `{data.get('case_id', 'unknown')}`",
-        f"- **Host:** `{host_display}`",
-        f"- **Generated At (UTC):** `{data.get('generated_at', now_utc())}`",
-        f"- **Confirmed Findings:** `{confirmed_count}` | **Inconclusive:** `{inconclusive_count}`",
-        f"- **Traceable IPs:** `{trace_counts['traced']}` | **Untraceable/Unknown:** `{trace_counts['untraceable'] + trace_counts['unknown']}`",
-        f"- **Log Integrity Concerns:** `{log_risk_count}`",
-        f"- **Declared Expected Workload:** `{maybe_redact(str(data.get('expected_workload', '') or 'not provided'))}`",
+        render_table(
+            ["Metric", "Value"],
+            [
+                ["Incident ID", str(incident.get("id", "unknown"))],
+                ["Case ID", str(data.get("case_id", "unknown"))],
+                ["Host", host_display],
+                ["Generated At (UTC)", str(data.get("generated_at", now_utc()))],
+                ["Confirmed Findings", str(ctx["confirmed_count"])],
+                ["Inconclusive Findings", str(ctx["inconclusive_count"])],
+                ["Traceable IPs", str(ctx["trace_counts"]["traced"])],
+                ["Untraceable / Unknown IPs", str(ctx["trace_counts"]["untraceable"] + ctx["trace_counts"]["unknown"])],
+                ["Log Integrity Concerns", str(ctx["log_risk_count"])],
+                ["Expected Workload", maybe_redact(str(data.get("expected_workload", "") or "not provided"))],
+            ],
+        ),
+        "",
+        anchor_tag("mgmt-risks"),
+        "## Risk Overview",
+    ])
+    lines.extend(key_risk_lines(data, case_dir=case_dir))
+    lines.extend([
         "",
         "## Decision Notes",
         "- Observed facts remain separated from inference and attribution in the full report.",
@@ -273,6 +404,7 @@ def build_management_view(data: dict[str, Any], redact: bool, case_dir: str | No
                 f"- **Judgment:** {maybe_redact(item['statement'])}",
                 f"- **Type / Status / Confidence:** `{claim_type_label(item['claim_type'])}` / `{item['status']}` / `{item['confidence']}`",
                 f"- **Hypothesis:** `{maybe_redact(item['hypothesis_id'])}`",
+                f"- **Confidence Reason:** {maybe_redact(item['confidence_reason'])}",
                 f"- **Evidence Chain:** {compact_evidence_chain(evidence_ids, evid_idx, case_dir, limit=4, base_dir=Path(case_dir) / 'reports' if case_dir else None).replace('](#evidence-', '](../report.md#evidence-')}",
                 "",
             ])
@@ -290,16 +422,19 @@ def build_management_view(data: dict[str, Any], redact: bool, case_dir: str | No
 
 
 def build_management_view_zh_cn(data: dict[str, Any], redact: bool, case_dir: str | None = None) -> str:
+    ctx = prepare_report_context(data, redact=redact, strict=False, case_dir=case_dir)
     incident = as_dict(data.get("incident"))
     host = as_dict(data.get("host"))
-    findings = [as_dict(x) for x in as_list(data.get("findings"))]
-    ip_traces = [as_dict(x) for x in as_list(data.get("ip_traces"))]
-    log_integrity = [as_dict(x) for x in as_list(data.get("log_integrity"))]
-    evidence_items = [as_dict(x) for x in as_list(data.get("evidence"))]
-    baseline_assessment = load_optional_case_json(case_dir, "meta/baseline_assessment.json")
+    findings = ctx["findings"]
+    evid_idx = ctx["evid_idx"]
+    baseline_assessment = ctx["baseline_assessment"]
+    posture_info = investigation_posture_payload(ctx)
 
     def maybe_redact(value: str) -> str:
         return sanitize_report_text(value, redact)
+
+    def maybe_redact_zh(value: str) -> str:
+        return zh_report_text(value, redact)
 
     def claim_type_label_zh_cn(value: str) -> str:
         return {
@@ -308,42 +443,67 @@ def build_management_view_zh_cn(data: dict[str, Any], redact: bool, case_dir: st
             "attribution": "归因",
         }.get(normalize_claim_type(value), "推断")
 
-    evid_idx = evidence_index(evidence_items)
-    confirmed_count, inconclusive_count = finding_status_counts(findings, evid_idx)
-    trace_counts = {"traced": 0, "untraceable": 0, "unknown": 0}
-    for item in ip_traces:
-        trace_counts[normalize_trace_status(str(item.get("trace_status", "")))] += 1
-    log_risk_count = sum(
-        1
-        for x in log_integrity
-        if str(x.get("status", "")).strip().lower() in {"missing", "tampered", "suspicious"}
-    )
     key_items = top_judgments(findings, evid_idx, limit=5)
     host_display = f"{host.get('name', 'unknown')} ({maybe_redact(str(host.get('ip', 'unknown')))})"
     lines = [anchor_tag("mgmt-top"), f"# {incident.get('title', 'Mining Host Investigation')} - 管理摘要", ""]
     if case_dir:
         lines.extend([
-            "[案件索引](./index.zh-CN.md) | [Case Bundle](./index.md) | [中文全量报告](../report.zh-CN.md) | [Full Report](../report.md) | [SOC 摘要](./soc-summary.zh-CN.md) | [Management Summary](./management-summary.md)",
+            "[案件索引](./index.zh-CN.md) | [英文索引](./index.md) | [中文全量报告](../report.zh-CN.md) | [英文全量报告](../report.md) | [SOC 摘要](./soc-summary.zh-CN.md) | [英文管理摘要](./management-summary.md)",
             "",
         ])
     lines.extend([
         "> 面向管理决策的精简视图。审批任何处置动作前，请回到全量报告核对完整证据链与命令来源。",
         "",
         "## 快速链接",
+        "- [核心判断](#mgmt-conclusion)",
         "- [管理快照](#mgmt-snapshot)",
+        "- [风险概览](#mgmt-risks)",
         "- [优先研判](#mgmt-judgments)",
         "- [管理提示](#mgmt-caveat)",
         "",
+        anchor_tag("mgmt-conclusion"),
+        "## 核心判断",
+        f"- **当前结论：** {maybe_redact_zh({
+            'Direct miner-like runtime indicators were observed during collection.': '本次采集中观察到了直接的挖矿类运行时指标。',
+            'No direct miner IOC was observed in this collection. Current results are limited to review surfaces that still require analyst confirmation.': '本次采集中未观察到直接的挖矿 IOC，当前结果主要是需要人工复核的访问面与环境侧线索。',
+            'This collection did not produce direct miner evidence or enough review surface to support a compromise conclusion.': '本次采集未形成直接挖矿证据，也未形成足以支撑入侵结论的复核面。',
+        }.get(posture_info['verdict'], posture_info['verdict']))}",
+        f"- **置信度态势：** {confidence_icon(posture_info['posture'])} `{ {'high':'高','medium':'中','low':'低','unknown':'未知'}.get(posture_info['posture'], posture_info['posture']) }`",
+        f"- **判断边界：** {maybe_redact_zh({
+            'Triage should proceed as a compromise-oriented case, but attribution still requires additional evidence.': '建议按入侵方向继续排查，但归因仍需补充更多证据。',
+            'This does not clear the host. The present output supports review-driven triage, not a confirmed mining-compromise conclusion.': '这并不代表主机可以直接排除风险，当前结果只支撑复核型分诊，不足以确认已发生挖矿入侵。',
+            'Absence of indicators in this pass is not proof of absence; visibility, timing, and privilege may still be incomplete.': '本轮未命中指标不等于主机无风险，观察窗口、权限范围和证据残留都可能仍不完整。',
+        }.get(posture_info['boundary'], posture_info['boundary']))}",
+        f"- **优先方向：** {maybe_redact_zh({
+            'Prioritize runtime lineage, parent-child process review, wallet/pool traces, and persistence pivots.': '优先复核运行链路、父子进程关系、钱包/矿池痕迹和持久化落点。',
+            'Prioritize surviving access traces, service startup context, container/cloud exposure, and deleted-log fallback artifacts.': '优先复核仍存活的访问痕迹、服务启动上下文、容器/云暴露面，以及日志删除后的替代证据。',
+            'Expand time window, privilege visibility, and external telemetry correlation before closing the case.': '在结束案件前应继续扩展观察窗口、权限可见性，并结合外部遥测交叉验证。',
+        }.get(posture_info['focus'], posture_info['focus']))}",
+        "- **操作边界：** 本摘要对应的案件包仅包含只读采集结果，不包含任何状态变更。",
+        "",
         anchor_tag("mgmt-snapshot"),
         "## 管理快照",
-        f"- **事件 ID：** `{incident.get('id', 'unknown')}`",
-        f"- **案件 ID：** `{data.get('case_id', 'unknown')}`",
-        f"- **主机：** `{host_display}`",
-        f"- **生成时间（UTC）：** `{data.get('generated_at', now_utc())}`",
-        f"- **已确认结论：** `{confirmed_count}` | **待定结论：** `{inconclusive_count}`",
-        f"- **可溯源 IP：** `{trace_counts['traced']}` | **未溯源 / 未知：** `{trace_counts['untraceable'] + trace_counts['unknown']}`",
-        f"- **日志完整性风险：** `{log_risk_count}`",
-        f"- **声明的预期工作负载：** `{maybe_redact(str(data.get('expected_workload', '') or '未提供'))}`",
+        render_table(
+            ["指标", "值"],
+            [
+                ["事件 ID", str(incident.get("id", "unknown"))],
+                ["案件 ID", str(data.get("case_id", "unknown"))],
+                ["主机", host_display],
+                ["生成时间（UTC）", str(data.get("generated_at", now_utc()))],
+                ["已确认结论", str(ctx["confirmed_count"])],
+                ["待定结论", str(ctx["inconclusive_count"])],
+                ["可溯源 IP", str(ctx["trace_counts"]["traced"])],
+                ["未溯源 / 未知 IP", str(ctx["trace_counts"]["untraceable"] + ctx["trace_counts"]["unknown"])],
+                ["日志完整性风险", str(ctx["log_risk_count"])],
+                ["预期工作负载", maybe_redact(str(data.get("expected_workload", "") or "未提供"))],
+            ],
+        ),
+        "",
+        anchor_tag("mgmt-risks"),
+        "## 风险概览",
+    ])
+    lines.extend(key_risk_lines_zh_cn(data, case_dir=case_dir))
+    lines.extend([
         "",
         "## 决策提示",
         "- 全量报告中会严格区分观测事实、推断和归因。",
@@ -358,10 +518,11 @@ def build_management_view_zh_cn(data: dict[str, Any], redact: bool, case_dir: st
             evidence_ids = item['evidence_ids'].split(', ') if item['evidence_ids'] != 'none' else []
             lines.extend([
                 f"### {status_icon(item['status'])} {item['id']}",
-                f"- **研判：** {maybe_redact(item['statement'])}",
-                f"- **类型 / 状态 / 置信度：** `{claim_type_label_zh_cn(item['claim_type'])}` / `{item['status']}` / `{item['confidence']}`",
+                f"- **研判：** {maybe_redact_zh(item['statement'])}",
+                f"- **类型 / 状态 / 置信度：** `{claim_type_label_zh_cn(item['claim_type'])}` / `{ {'confirmed':'已确认','inconclusive':'待定'}.get(item['status'], item['status']) }` / `{ {'high':'高','medium':'中','low':'低','unknown':'未知'}.get(item['confidence'], item['confidence']) }`",
                 f"- **假设编号：** `{maybe_redact(item['hypothesis_id'])}`",
-                f"- **证据链：** {compact_evidence_chain(evidence_ids, evid_idx, case_dir, limit=4, base_dir=Path(case_dir) / 'reports' if case_dir else None).replace('](#evidence-', '](../report.zh-CN.md#evidence-')}",
+                f"- **置信度理由：** {maybe_redact_zh(item['confidence_reason'])}",
+                f"- **证据链：** {compact_evidence_chain_zh_cn(evidence_ids, evid_idx, case_dir, limit=4, base_dir=Path(case_dir) / 'reports' if case_dir else None).replace('](#evidence-', '](../report.zh-CN.md#evidence-')}",
                 "",
             ])
     else:
@@ -377,14 +538,14 @@ def build_management_view_zh_cn(data: dict[str, Any], redact: bool, case_dir: st
 
 
 def build_soc_view(data: dict[str, Any], redact: bool, case_dir: str | None = None) -> str:
+    ctx = prepare_report_context(data, redact=redact, strict=False, case_dir=case_dir)
     incident = as_dict(data.get("incident"))
     host = as_dict(data.get("host"))
-    evidence_items = [as_dict(x) for x in as_list(data.get("evidence"))]
-    findings = [as_dict(x) for x in as_list(data.get("findings"))]
-    scene_reconstruction = as_dict(data.get("scene_reconstruction"))
-    evid_idx = evidence_index(evidence_items)
-    key_items = top_judgments(findings, evid_idx, limit=8)
-    time_norm = as_dict(scene_reconstruction.get("time_normalization"))
+    scene_reconstruction = ctx["scene_reconstruction"]
+    evid_idx = ctx["evid_idx"]
+    key_items = top_judgments(ctx["findings"], evid_idx, limit=8)
+    time_norm = ctx["time_norm"]
+    posture_info = investigation_posture_payload(ctx)
 
     def maybe_redact(value: str) -> str:
         return sanitize_report_text(value, redact)
@@ -399,43 +560,57 @@ def build_soc_view(data: dict[str, Any], redact: bool, case_dir: str | None = No
         "> SOC-facing triage summary. Use the full report for full command context and evidence detail blocks.",
         "",
         "## Quick Links",
+        "- [Triage Conclusion](#soc-conclusion)",
         "- [Triage Snapshot](#soc-snapshot)",
         "- [High-Signal Samples](#soc-samples)",
         "- [Key Judgments](#soc-judgments)",
         "",
+        anchor_tag("soc-conclusion"),
+        "## Triage Conclusion",
+        f"- **Triage Verdict:** {maybe_redact(posture_info['verdict'])}",
+        f"- **Confidence Posture:** {confidence_icon(posture_info['posture'])} `{posture_info['posture']}`",
+        f"- **Immediate Next Pivot:** {maybe_redact(posture_info['focus'])}",
+        f"- **Decision Boundary:** {maybe_redact(posture_info['boundary'])}",
+        "",
         anchor_tag("soc-snapshot"),
         "## Triage Snapshot",
-        f"- **Incident ID:** `{incident.get('id', 'unknown')}`",
-        f"- **Case ID:** `{data.get('case_id', 'unknown')}`",
-        f"- **Host ID:** `{data.get('host_id', 'unknown')}`",
-        f"- **Host:** `{host.get('name', 'unknown')}` ({maybe_redact(str(host.get('ip', 'unknown')))})",
-        f"- **Collector Version:** `{data.get('collector_version', 'unknown')}`",
-        f"- **Report Normalization Timezone:** `{maybe_redact(str(time_norm.get('report_timezone', data.get('report_timezone_basis', data.get('timezone', 'UTC')))))}`",
-        f"- **Host Reported Timezone:** `{maybe_redact(str(time_norm.get('host_reported_timezone', 'unknown')))}`",
-        f"- **Host NTP Synchronized:** `{maybe_redact(str(time_norm.get('host_ntp_synchronized', 'unknown')))}`",
+        render_table(
+            ["Field", "Value"],
+            [
+                ["Incident ID", str(incident.get("id", "unknown"))],
+                ["Case ID", str(data.get("case_id", "unknown"))],
+                ["Host ID", str(data.get("host_id", "unknown"))],
+                ["Host", f"{host.get('name', 'unknown')} ({maybe_redact(str(host.get('ip', 'unknown')))})"],
+                ["Collector Version", str(data.get("collector_version", "unknown"))],
+                ["Report Normalization Timezone", maybe_redact(str(time_norm.get("report_timezone", data.get("report_timezone_basis", data.get("timezone", "UTC")))))],
+                ["Host Reported Timezone", maybe_redact(str(time_norm.get("host_reported_timezone", "unknown")))],
+                ["Host NTP Synchronized", maybe_redact(str(time_norm.get("host_ntp_synchronized", "unknown")))],
+                ["Findings", f"{ctx['confirmed_count']} confirmed / {ctx['inconclusive_count']} inconclusive"],
+                ["Log Integrity Risks", str(ctx["log_risk_count"])],
+            ],
+        ),
         "",
         anchor_tag("soc-samples"),
         "## High-Signal Samples",
-        f"- **Auth Source IPs:** {shorten_list(as_list(scene_reconstruction.get('auth_source_ips')), limit=10)}",
-        f"- **Listening Ports:** {shorten_list(as_list(scene_reconstruction.get('listening_ports')), limit=12)}",
-        f"- **Process IOC Samples:** {shorten_list(as_list(scene_reconstruction.get('process_ioc_samples')), limit=6)}",
-        f"- **Network IOC Samples:** {shorten_list(as_list(scene_reconstruction.get('network_ioc_samples')), limit=6)}",
-        f"- **Initial-Access Review Samples:** {shorten_list(as_list(scene_reconstruction.get('initial_access_review_samples')), limit=6)}",
-        f"- **Container / Cloud Review Samples:** {shorten_list(as_list(scene_reconstruction.get('container_cloud_review_samples')), limit=6)}",
-        f"- **Kernel / eBPF Samples:** {shorten_list(as_list(scene_reconstruction.get('kernel_review_samples')), limit=6)}",
         "",
-        anchor_tag("soc-judgments"),
-        "## Key Judgments",
     ])
+    append_sample_group(lines, "Auth Source IPs", as_list(scene_reconstruction.get("auth_source_ips")), maybe_redact, limit=4, max_len=80)
+    append_sample_group(lines, "Listening Ports", as_list(scene_reconstruction.get("listening_ports")), maybe_redact, limit=6, max_len=80)
+    append_sample_group(lines, "Process IOC Samples", as_list(scene_reconstruction.get("process_ioc_samples")), maybe_redact, limit=4, max_len=140)
+    append_sample_group(lines, "Network IOC Samples", as_list(scene_reconstruction.get("network_ioc_samples")), maybe_redact, limit=4, max_len=140)
+    append_sample_group(lines, "Initial-Access Review Samples", as_list(scene_reconstruction.get("initial_access_review_samples")), maybe_redact, limit=4, max_len=140)
+    append_sample_group(lines, "Container / Cloud Review Samples", as_list(scene_reconstruction.get("container_cloud_review_samples")), maybe_redact, limit=4, max_len=140)
+    append_sample_group(lines, "Kernel / eBPF Samples", as_list(scene_reconstruction.get("kernel_review_samples")), maybe_redact, limit=4, max_len=140)
+    lines.extend([anchor_tag("soc-judgments"), "## Key Judgments"])
     if key_items:
         for item in key_items:
             evidence_ids = item['evidence_ids'].split(', ') if item['evidence_ids'] != 'none' else []
             lines.extend([
-                f"### {status_icon(item['status'])} {item['id']} ? `{item['hypothesis_id']}`",
+                f"### {status_icon(item['status'])} {item['id']} | `{item['hypothesis_id']}`",
                 f"- **Statement:** {maybe_redact(item['statement'])}",
                 f"- **Type / Status / Confidence:** `{claim_type_label(item['claim_type'])}` / `{item['status']}` / `{item['confidence']}`",
                 f"- **Confidence Reason:** {maybe_redact(item['confidence_reason'])}",
-                f"- **Evidence Chain:** {compact_evidence_chain(evidence_ids, evid_idx, case_dir, limit=6, base_dir=Path(case_dir) / 'reports' if case_dir else None).replace('](#evidence-', '](../report.md#evidence-')}",
+                f"- **Evidence Chain:** {compact_evidence_chain(evidence_ids, evid_idx, case_dir, limit=4, base_dir=Path(case_dir) / 'reports' if case_dir else None).replace('](#evidence-', '](../report.md#evidence-')}",
                 "",
             ])
     else:
@@ -446,17 +621,20 @@ def build_soc_view(data: dict[str, Any], redact: bool, case_dir: str | None = No
 
 
 def build_soc_view_zh_cn(data: dict[str, Any], redact: bool, case_dir: str | None = None) -> str:
+    ctx = prepare_report_context(data, redact=redact, strict=False, case_dir=case_dir)
     incident = as_dict(data.get("incident"))
     host = as_dict(data.get("host"))
-    evidence_items = [as_dict(x) for x in as_list(data.get("evidence"))]
-    findings = [as_dict(x) for x in as_list(data.get("findings"))]
-    scene_reconstruction = as_dict(data.get("scene_reconstruction"))
-    evid_idx = evidence_index(evidence_items)
-    key_items = top_judgments(findings, evid_idx, limit=8)
-    time_norm = as_dict(scene_reconstruction.get("time_normalization"))
+    scene_reconstruction = ctx["scene_reconstruction"]
+    evid_idx = ctx["evid_idx"]
+    key_items = top_judgments(ctx["findings"], evid_idx, limit=8)
+    time_norm = ctx["time_norm"]
+    posture_info = investigation_posture_payload(ctx)
 
     def maybe_redact(value: str) -> str:
         return sanitize_report_text(value, redact)
+
+    def maybe_redact_zh(value: str) -> str:
+        return zh_report_text(value, redact)
 
     def claim_type_label_zh_cn(value: str) -> str:
         return {
@@ -468,50 +646,76 @@ def build_soc_view_zh_cn(data: dict[str, Any], redact: bool, case_dir: str | Non
     lines = [anchor_tag("soc-top"), f"# {incident.get('title', 'Mining Host Investigation')} - SOC 摘要", ""]
     if case_dir:
         lines.extend([
-            "[案件索引](./index.zh-CN.md) | [Case Bundle](./index.md) | [中文全量报告](../report.zh-CN.md) | [Full Report](../report.md) | [管理摘要](./management-summary.zh-CN.md) | [SOC Summary](./soc-summary.md)",
+            "[案件索引](./index.zh-CN.md) | [英文索引](./index.md) | [中文全量报告](../report.zh-CN.md) | [英文全量报告](../report.md) | [管理摘要](./management-summary.zh-CN.md) | [英文 SOC 摘要](./soc-summary.md)",
             "",
         ])
     lines.extend([
         "> 面向 SOC / 值守团队的快速分诊摘要。完整命令上下文、证据块和产物路径请查看中文全量报告。",
         "",
         "## 快速链接",
+        "- [分诊结论](#soc-conclusion)",
         "- [分诊快照](#soc-snapshot)",
         "- [高信号样本](#soc-samples)",
         "- [关键研判](#soc-judgments)",
         "",
+        anchor_tag("soc-conclusion"),
+        "## 分诊结论",
+        f"- **当前判断：** {maybe_redact_zh({
+            'Direct miner-like runtime indicators were observed during collection.': '本次采集中观察到了直接的挖矿类运行时指标。',
+            'No direct miner IOC was observed in this collection. Current results are limited to review surfaces that still require analyst confirmation.': '本次采集中未观察到直接的挖矿 IOC，当前结果主要是需要人工复核的访问面与环境侧线索。',
+            'This collection did not produce direct miner evidence or enough review surface to support a compromise conclusion.': '本次采集未形成直接挖矿证据，也未形成足以支撑入侵结论的复核面。',
+        }.get(posture_info['verdict'], posture_info['verdict']))}",
+        f"- **置信度态势：** {confidence_icon(posture_info['posture'])} `{ {'high':'高','medium':'中','low':'低','unknown':'未知'}.get(posture_info['posture'], posture_info['posture']) }`",
+        f"- **下一步重点：** {maybe_redact_zh({
+            'Prioritize runtime lineage, parent-child process review, wallet/pool traces, and persistence pivots.': '优先复核运行链路、父子进程关系、钱包/矿池痕迹和持久化落点。',
+            'Prioritize surviving access traces, service startup context, container/cloud exposure, and deleted-log fallback artifacts.': '优先复核仍存活的访问痕迹、服务启动上下文、容器/云暴露面，以及日志删除后的替代证据。',
+            'Expand time window, privilege visibility, and external telemetry correlation before closing the case.': '继续扩展观察窗口、权限可见性，并结合外部遥测交叉验证。',
+        }.get(posture_info['focus'], posture_info['focus']))}",
+        f"- **判断边界：** {maybe_redact_zh({
+            'Triage should proceed as a compromise-oriented case, but attribution still requires additional evidence.': '建议按入侵方向继续排查，但归因仍需补充更多证据。',
+            'This does not clear the host. The present output supports review-driven triage, not a confirmed mining-compromise conclusion.': '当前结果不构成主机已安全的证明，只支撑复核型分诊，不足以确认已发生挖矿入侵。',
+            'Absence of indicators in this pass is not proof of absence; visibility, timing, and privilege may still be incomplete.': '本轮未命中指标不等于主机无风险，观察窗口、权限范围和证据残留都可能仍不完整。',
+        }.get(posture_info['boundary'], posture_info['boundary']))}",
+        "",
         anchor_tag("soc-snapshot"),
         "## 分诊快照",
-        f"- **事件 ID：** `{incident.get('id', 'unknown')}`",
-        f"- **案件 ID：** `{data.get('case_id', 'unknown')}`",
-        f"- **主机 ID：** `{data.get('host_id', 'unknown')}`",
-        f"- **主机：** `{host.get('name', 'unknown')}` ({maybe_redact(str(host.get('ip', 'unknown')))})",
-        f"- **采集器版本：** `{data.get('collector_version', 'unknown')}`",
-        f"- **报告归一化时区：** `{maybe_redact(str(time_norm.get('report_timezone', data.get('report_timezone_basis', data.get('timezone', 'UTC')))))}`",
-        f"- **主机报告时区：** `{maybe_redact(str(time_norm.get('host_reported_timezone', 'unknown')))}`",
-        f"- **主机 NTP 同步：** `{maybe_redact(str(time_norm.get('host_ntp_synchronized', 'unknown')))}`",
+        render_table(
+            ["字段", "值"],
+            [
+                ["事件 ID", str(incident.get("id", "unknown"))],
+                ["案件 ID", str(data.get("case_id", "unknown"))],
+                ["主机 ID", str(data.get("host_id", "unknown"))],
+                ["主机", f"{host.get('name', 'unknown')} ({maybe_redact(str(host.get('ip', 'unknown')))})"],
+                ["采集器版本", str(data.get("collector_version", "unknown"))],
+                ["报告归一化时区", maybe_redact(str(time_norm.get("report_timezone", data.get("report_timezone_basis", data.get("timezone", "UTC")))))],
+                ["主机报告时区", maybe_redact(str(time_norm.get("host_reported_timezone", "unknown")))],
+                ["主机 NTP 同步", maybe_redact_zh(str(time_norm.get("host_ntp_synchronized", "unknown")))],
+                ["已确认 / 待定", f"{ctx['confirmed_count']} / {ctx['inconclusive_count']}"],
+                ["日志完整性风险", str(ctx["log_risk_count"])],
+            ],
+        ),
         "",
         anchor_tag("soc-samples"),
         "## 高信号样本",
-        f"- **认证来源 IP：** {shorten_list(as_list(scene_reconstruction.get('auth_source_ips')), limit=10)}",
-        f"- **监听端口：** {shorten_list(as_list(scene_reconstruction.get('listening_ports')), limit=12)}",
-        f"- **进程 IOC 样本：** {shorten_list(as_list(scene_reconstruction.get('process_ioc_samples')), limit=6)}",
-        f"- **网络 IOC 样本：** {shorten_list(as_list(scene_reconstruction.get('network_ioc_samples')), limit=6)}",
-        f"- **初始访问复核样本：** {shorten_list(as_list(scene_reconstruction.get('initial_access_review_samples')), limit=6)}",
-        f"- **容器 / 云侧复核样本：** {shorten_list(as_list(scene_reconstruction.get('container_cloud_review_samples')), limit=6)}",
-        f"- **Kernel / eBPF 样本：** {shorten_list(as_list(scene_reconstruction.get('kernel_review_samples')), limit=6)}",
         "",
-        anchor_tag("soc-judgments"),
-        "## 关键研判",
     ])
+    append_sample_group(lines, "认证来源 IP", as_list(scene_reconstruction.get("auth_source_ips")), maybe_redact, limit=4, max_len=80, empty_label="无。")
+    append_sample_group(lines, "监听端口", as_list(scene_reconstruction.get("listening_ports")), maybe_redact, limit=6, max_len=80, empty_label="无。")
+    append_sample_group(lines, "进程 IOC 样本", as_list(scene_reconstruction.get("process_ioc_samples")), maybe_redact, limit=4, max_len=140, empty_label="无。")
+    append_sample_group(lines, "网络 IOC 样本", as_list(scene_reconstruction.get("network_ioc_samples")), maybe_redact, limit=4, max_len=140, empty_label="无。")
+    append_sample_group(lines, "初始访问复核样本", as_list(scene_reconstruction.get("initial_access_review_samples")), maybe_redact, limit=4, max_len=140, empty_label="无。")
+    append_sample_group(lines, "容器 / 云侧复核样本", as_list(scene_reconstruction.get("container_cloud_review_samples")), maybe_redact, limit=4, max_len=140, empty_label="无。")
+    append_sample_group(lines, "Kernel / eBPF 样本", as_list(scene_reconstruction.get("kernel_review_samples")), maybe_redact, limit=4, max_len=140, empty_label="无。")
+    lines.extend([anchor_tag("soc-judgments"), "## 关键研判"])
     if key_items:
         for item in key_items:
             evidence_ids = item['evidence_ids'].split(', ') if item['evidence_ids'] != 'none' else []
             lines.extend([
                 f"### {status_icon(item['status'])} {item['id']} · `{item['hypothesis_id']}`",
-                f"- **表述：** {maybe_redact(item['statement'])}",
-                f"- **类型 / 状态 / 置信度：** `{claim_type_label_zh_cn(item['claim_type'])}` / `{item['status']}` / `{item['confidence']}`",
-                f"- **置信度理由：** {maybe_redact(item['confidence_reason'])}",
-                f"- **证据链：** {compact_evidence_chain(evidence_ids, evid_idx, case_dir, limit=6, base_dir=Path(case_dir) / 'reports' if case_dir else None).replace('](#evidence-', '](../report.zh-CN.md#evidence-')}",
+                f"- **表述：** {maybe_redact_zh(item['statement'])}",
+                f"- **类型 / 状态 / 置信度：** `{claim_type_label_zh_cn(item['claim_type'])}` / `{ {'confirmed':'已确认','inconclusive':'待定'}.get(item['status'], item['status']) }` / `{ {'high':'高','medium':'中','low':'低','unknown':'未知'}.get(item['confidence'], item['confidence']) }`",
+                f"- **置信度理由：** {maybe_redact_zh(item['confidence_reason'])}",
+                f"- **证据链：** {compact_evidence_chain_zh_cn(evidence_ids, evid_idx, case_dir, limit=4, base_dir=Path(case_dir) / 'reports' if case_dir else None).replace('](#evidence-', '](../report.zh-CN.md#evidence-')}",
                 "",
             ])
     else:
@@ -712,9 +916,11 @@ def latest_judgment_lines_zh_cn(data: dict[str, Any], case_dir: str | None = Non
     out: list[str] = []
     for item in items:
         evidence_ids = item["evidence_ids"].split(", ") if item["evidence_ids"] != "none" else []
-        chain = compact_evidence_chain(evidence_ids, evid_idx, case_dir, limit=3, base_dir=Path(case_dir) / 'reports' if case_dir else None).replace('](#evidence-', '](../report.zh-CN.md#evidence-')
+        chain = compact_evidence_chain_zh_cn(evidence_ids, evid_idx, case_dir, limit=3, base_dir=Path(case_dir) / 'reports' if case_dir else None).replace('](#evidence-', '](../report.zh-CN.md#evidence-')
+        status_label = {"confirmed": "已确认", "inconclusive": "待定"}.get(item["status"], item["status"])
+        confidence_label = {"high": "高", "medium": "中", "low": "低", "unknown": "未知"}.get(item["confidence"], item["confidence"])
         out.append(
-            f"- `{item['id']}` [{claim_type_label_zh_cn(item['claim_type'])}/{item['status']}/{item['confidence']}] {item['statement']} | 证据：{chain}"
+            f"- `{item['id']}` [{claim_type_label_zh_cn(item['claim_type'])}/{status_label}/{confidence_label}] {localize_auto_text_zh_cn(item['statement'])} | 证据：{chain}"
         )
     if not out:
         out.append("- 暂无有证据支撑的研判。")
@@ -978,6 +1184,234 @@ def confidence_icon(confidence: str) -> str:
     )
 
 
+def overall_confidence_posture(ctx: dict[str, Any]) -> str:
+    confidence_counts = ctx["confidence_counts"]
+    high = safe_int(confidence_counts.get("high", 0))
+    medium = safe_int(confidence_counts.get("medium", 0))
+    low = safe_int(confidence_counts.get("low", 0))
+    scene = ctx["scene_reconstruction"]
+    direct_hits = safe_int(scene.get("process_ioc_match_count", 0)) + safe_int(
+        scene.get("network_ioc_hit_count", 0)
+    )
+    if direct_hits > 0:
+        return "high" if high >= max(1, low) else "medium"
+    if low > high + medium:
+        return "low"
+    if high or medium:
+        return "medium"
+    if safe_int(ctx.get("confirmed_count", 0)) or safe_int(ctx.get("inconclusive_count", 0)):
+        return "low"
+    return "unknown"
+
+
+def investigation_posture_payload(ctx: dict[str, Any]) -> dict[str, Any]:
+    scene = ctx["scene_reconstruction"]
+    process_hits = safe_int(scene.get("process_ioc_match_count", 0))
+    network_hits = safe_int(scene.get("network_ioc_hit_count", 0))
+    access_hits = safe_int(scene.get("initial_access_review_hit_count", 0))
+    container_hits = safe_int(scene.get("container_cloud_review_hit_count", 0))
+    kernel_hits = safe_int(scene.get("kernel_review_hit_count", 0))
+    unknown_trace_count = safe_int(ctx["trace_counts"].get("untraceable", 0)) + safe_int(
+        ctx["trace_counts"].get("unknown", 0)
+    )
+    posture = overall_confidence_posture(ctx)
+
+    if process_hits or network_hits:
+        verdict = "Direct miner-like runtime indicators were observed during collection."
+        boundary = "Triage should proceed as a compromise-oriented case, but attribution still requires additional evidence."
+        focus = "Prioritize runtime lineage, parent-child process review, wallet/pool traces, and persistence pivots."
+    elif access_hits or container_hits or kernel_hits:
+        verdict = (
+            "No direct miner IOC was observed in this collection. Current results are limited to review surfaces "
+            "that still require analyst confirmation."
+        )
+        boundary = "This does not clear the host. The present output supports review-driven triage, not a confirmed mining-compromise conclusion."
+        focus = "Prioritize surviving access traces, service startup context, container/cloud exposure, and deleted-log fallback artifacts."
+    else:
+        verdict = "This collection did not produce direct miner evidence or enough review surface to support a compromise conclusion."
+        boundary = "Absence of indicators in this pass is not proof of absence; visibility, timing, and privilege may still be incomplete."
+        focus = "Expand time window, privilege visibility, and external telemetry correlation before closing the case."
+
+    return {
+        "posture": posture,
+        "verdict": verdict,
+        "boundary": boundary,
+        "focus": focus,
+        "process_hits": process_hits,
+        "network_hits": network_hits,
+        "access_hits": access_hits,
+        "container_hits": container_hits,
+        "kernel_hits": kernel_hits,
+        "unknown_trace_count": unknown_trace_count,
+    }
+
+
+def append_sample_group(
+    lines: list[str],
+    heading: str,
+    items: list[Any],
+    maybe_redact,
+    *,
+    limit: int = 4,
+    max_len: int = 140,
+    empty_label: str = "None.",
+) -> None:
+    lines.append(f"### {heading}")
+    if items:
+        for item in items[:limit]:
+            lines.append(f"- {maybe_redact(compact_text(item, max_len=max_len))}")
+        if len(items) > limit:
+            lines.append(f"- ... (+{len(items) - limit} more)")
+    else:
+        lines.append(f"- {empty_label}")
+    lines.append("")
+
+
+def top_conclusion_lines(
+    ctx: dict[str, Any],
+    maybe_redact,
+    case_dir: str | None = None,
+    limit: int = 3,
+) -> list[str]:
+    posture_info = investigation_posture_payload(ctx)
+    process_hits = posture_info["process_hits"]
+    network_hits = posture_info["network_hits"]
+    access_hits = posture_info["access_hits"]
+    container_hits = posture_info["container_hits"]
+    kernel_hits = posture_info["kernel_hits"]
+    unknown_trace_count = posture_info["unknown_trace_count"]
+    posture = posture_info["posture"]
+    top_items = top_judgments(ctx["findings"], ctx["evid_idx"], limit=limit)
+    expected_workload = maybe_redact(ctx["expected_workload"] or "not provided")
+    observed_uid = str(ctx["privilege_scope"].get("uid", "unknown")).strip() or "unknown"
+
+    lines = [
+        anchor_tag("report-conclusion"),
+        "## Investigation Conclusion",
+        "",
+        f"- **Verdict:** {maybe_redact(posture_info['verdict'])}",
+        f"- **Confidence Posture:** {confidence_icon(posture)} `{posture}`",
+        f"- **Decision Boundary:** {maybe_redact(posture_info['boundary'])}",
+        f"- **Read-Only Scope:** `0` state-changing actions executed during this collection.",
+        "",
+        "### Evidence Basis",
+        f"- **Runtime Indicators:** process IOC hits `{process_hits}`, network IOC hits `{network_hits}`.",
+        f"- **Review Surfaces:** initial access `{access_hits}`, container/cloud `{container_hits}`, kernel/eBPF `{kernel_hits}`.",
+        f"- **Finding State:** `{ctx['confirmed_count']}` confirmed, `{ctx['inconclusive_count']}` inconclusive.",
+        f"- **Expected Workload Context:** {expected_workload}.",
+    ]
+    if top_items:
+        lines.append("- **Highest-Signal Judgments:**")
+        for item in top_items:
+            evidence_ids = item["evidence_ids"].split(", ") if item["evidence_ids"] != "none" else []
+            chain = compact_evidence_chain_zh_cn(evidence_ids, ctx["evid_idx"], case_dir, limit=3)
+            lines.append(
+                f"  - `{item['id']}` [{claim_type_label(item['claim_type'])}/{item['status']}/{item['confidence']}] "
+                f"{maybe_redact(compact_text(item['statement'], max_len=180))} | evidence: {chain}"
+            )
+    else:
+        lines.append("- **Highest-Signal Judgments:** none yet.")
+    lines.extend(
+        [
+            "",
+            "### Remaining Gaps",
+            f"- **IP Traceability:** `{unknown_trace_count}` item(s) remain untraced or unknown.",
+            f"- **Log Survivability:** `{ctx['log_risk_count']}` artifact(s) are missing, suspicious, or tampered.",
+            f"- **Privilege Visibility:** observed UID `{maybe_redact(observed_uid)}`; deeper indicators outside current visibility cannot be treated as absent.",
+            "- **Next Reading Path:** [Findings](#report-findings) | [Timeline](#report-timeline) | [Evidence Details](#report-evidence-details)",
+            "",
+        ]
+    )
+    return lines
+
+
+def top_conclusion_lines_zh_cn(
+    ctx: dict[str, Any],
+    maybe_redact,
+    case_dir: str | None = None,
+    limit: int = 3,
+) -> list[str]:
+    posture_info = investigation_posture_payload(ctx)
+    process_hits = posture_info["process_hits"]
+    network_hits = posture_info["network_hits"]
+    access_hits = posture_info["access_hits"]
+    container_hits = posture_info["container_hits"]
+    kernel_hits = posture_info["kernel_hits"]
+    unknown_trace_count = posture_info["unknown_trace_count"]
+    posture = posture_info["posture"]
+    top_items = top_judgments(ctx["findings"], ctx["evid_idx"], limit=limit)
+    expected_workload = maybe_redact(ctx["expected_workload"] or "未提供")
+    observed_uid = str(ctx["privilege_scope"].get("uid", "unknown")).strip() or "unknown"
+    posture_label = {
+        "high": "高",
+        "medium": "中",
+        "low": "低",
+        "unknown": "未知",
+    }.get(posture, posture)
+
+    lines = [
+        anchor_tag("report-conclusion"),
+        "## 核心结论",
+        "",
+        f"- **结论：** {maybe_redact({
+            'Direct miner-like runtime indicators were observed during collection.': '本次采集中观察到了直接的挖矿类运行时指标。',
+            'No direct miner IOC was observed in this collection. Current results are limited to review surfaces that still require analyst confirmation.': '本次采集中未观察到直接的挖矿 IOC，当前结果主要是需要人工复核的访问面与环境侧线索。',
+            'This collection did not produce direct miner evidence or enough review surface to support a compromise conclusion.': '本次采集未形成直接挖矿证据，也未形成足以支撑入侵结论的复核面。',
+        }.get(posture_info['verdict'], posture_info['verdict']))}",
+        f"- **置信度态势：** {confidence_icon(posture)} `{posture_label}`",
+        f"- **判断边界：** {maybe_redact({
+            'Triage should proceed as a compromise-oriented case, but attribution still requires additional evidence.': '这足以支持按入侵方向继续排查，但单凭这一点仍不足以完成完整归因。',
+            'This does not clear the host. The present output supports review-driven triage, not a confirmed mining-compromise conclusion.': '这并不代表主机可以直接排除风险，只说明当前报告更偏向复核线索，而不是确认已发生挖矿入侵。',
+            'Absence of indicators in this pass is not proof of absence; visibility, timing, and privilege may still be incomplete.': '这一轮未命中指标不等于主机无风险，观察窗口、权限范围和证据残留都可能仍不完整。',
+        }.get(posture_info['boundary'], posture_info['boundary']))}",
+        "- **只读约束：** 本次采集未执行任何状态变更命令。",
+        "",
+        "### 证据依据",
+        f"- **运行时指标：** 进程 IOC 命中 `{process_hits}`，网络 IOC 命中 `{network_hits}`。",
+        f"- **复核面：** 初始访问 `{access_hits}`，容器/云 `{container_hits}`，内核/eBPF `{kernel_hits}`。",
+        f"- **研判状态：** 已确认 `{ctx['confirmed_count']}` 条，待定 `{ctx['inconclusive_count']}` 条。",
+        f"- **业务上下文：** 预期工作负载 {expected_workload}。",
+    ]
+    if top_items:
+        lines.append("- **高信号研判：**")
+        for item in top_items:
+            evidence_ids = item["evidence_ids"].split(", ") if item["evidence_ids"] != "none" else []
+            chain = compact_evidence_chain_zh_cn(evidence_ids, ctx["evid_idx"], case_dir, limit=3)
+            claim_label = {
+                "observed_fact": "观测事实",
+                "inference": "推断",
+                "attribution": "归因",
+            }.get(item["claim_type"], "推断")
+            status_label = {
+                "confirmed": "已确认",
+                "inconclusive": "待定",
+            }.get(item["status"], item["status"])
+            confidence_label = {
+                "high": "高",
+                "medium": "中",
+                "low": "低",
+                "unknown": "未知",
+            }.get(item["confidence"], item["confidence"])
+            lines.append(
+                f"  - `{item['id']}` [{claim_label}/{status_label}/{confidence_label}] "
+                f"{maybe_redact(localize_auto_text_zh_cn(compact_text(item['statement'], max_len=180)))} | 证据：{chain}"
+            )
+    else:
+        lines.append("- **高信号研判：** 暂无。")
+    lines.extend(
+        [
+            "",
+            "### 未解决缺口",
+            f"- **IP 溯源：** 仍有 `{unknown_trace_count}` 项未完成溯源或状态未知。",
+            f"- **日志留存：** 仍有 `{ctx['log_risk_count']}` 个日志相关产物缺失、可疑或疑似被篡改。",
+            f"- **权限可见性：** 当前观测 UID 为 `{maybe_redact(observed_uid)}`，超出当前权限边界的指标不能直接视为不存在。",
+            "- **继续阅读：** [结论与研判](#report-findings) | [时间线](#report-timeline) | [证据详情](#report-evidence-details)",
+            "",
+        ]
+    )
+    return lines
+
+
 def append_sample_section(
     lines: list[str], heading: str, items: list[Any], maybe_redact, limit: int = 8
 ) -> None:
@@ -1168,7 +1602,11 @@ def build_report(data: dict[str, Any], redact: bool, strict: bool, case_dir: str
         "> Evidence-constrained report. Facts, inferences, and attribution are separated. Missing evidence remains inconclusive.",
         "> Evidence IDs jump to detail blocks, and each detail block links to the collected artifact file.",
         "",
+    ])
+    lines.extend(top_conclusion_lines(ctx, maybe_redact, case_dir=case_dir, limit=3))
+    lines.extend([
         "## Quick Links",
+        "- [Investigation Conclusion](#report-conclusion)",
         "- [Metadata](#report-metadata)",
         "- [Executive Snapshot](#report-executive-summary)",
         "- [Key Risks](#report-key-risks)",
@@ -1216,6 +1654,11 @@ def build_report(data: dict[str, Any], redact: bool, strict: bool, case_dir: str
         "",
         anchor_tag("report-key-risks"),
         "## Key Risks",
+    ])
+    lines.extend(key_risk_lines(data, case_dir=case_dir))
+    lines.extend([
+        "",
+        anchor_tag("report-time-normalization"),
         "## Time Normalization",
         f"- **Report Normalization Timezone:** `{maybe_redact(ctx['report_timezone_basis'])}`",
         f"- **Host Reported Timezone:** `{maybe_redact(str(time_norm.get('host_reported_timezone', 'unknown')))}`",
@@ -1264,8 +1707,6 @@ def build_report(data: dict[str, Any], redact: bool, strict: bool, case_dir: str
     append_sample_section(lines, "Initial-Access Review Samples", as_list(scene_reconstruction.get("initial_access_review_samples")), maybe_redact, limit=10)
     append_sample_section(lines, "Container / Cloud Review Samples", as_list(scene_reconstruction.get("container_cloud_review_samples")), maybe_redact, limit=10)
     append_sample_section(lines, "Kernel / eBPF Review Samples", as_list(scene_reconstruction.get("kernel_review_samples")), maybe_redact, limit=10)
-
-    lines.extend(key_risk_lines(data, case_dir=case_dir))
     lines.extend([
         "",
         "## Coverage and False-Positive Control",
@@ -1478,8 +1919,11 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
     def maybe_redact(value: str) -> str:
         return sanitize_report_text(value, redact)
 
+    def maybe_redact_zh(value: str) -> str:
+        return zh_report_text(value, redact)
+
     def zh_evidence_refs(values: list[Any]) -> str:
-        return evidence_reference_list(values, ctx["evid_idx"], case_dir).replace("](#evidence-", "](./report.zh-CN.md#evidence-")
+        return evidence_reference_list_zh_cn(values, ctx["evid_idx"], case_dir).replace("](#evidence-", "](./report.zh-CN.md#evidence-")
 
     def claim_type_label_zh_cn(value: str) -> str:
         return {
@@ -1553,7 +1997,7 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
     host_name = maybe_redact(ctx["host_name"])
     host_ip = maybe_redact(ctx["host_ip"])
     host_display = host_name if host_name == host_ip else f"{host_name} ({host_ip})"
-    summary = maybe_redact(ctx["summary"] or "自动采集的只读证据快照，仍需分析师复核。")
+    summary = maybe_redact_zh(ctx["summary"] or "自动采集的只读证据快照，仍需分析人员复核。")
     confidence_counts = ctx["confidence_counts"]
     claim_type_counts = ctx["claim_type_counts"]
     trace_counts = ctx["trace_counts"]
@@ -1571,14 +2015,18 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
     lines: list[str] = [anchor_tag("report-top"), f"# {ctx['title']} - 中文全量报告", ""]
     if case_dir:
         lines.extend([
-            "[案件索引](./reports/index.zh-CN.md) | [English Report](./report.md) | [管理摘要](./reports/management-summary.zh-CN.md) | [SOC 摘要](./reports/soc-summary.zh-CN.md)",
+            "[案件索引](./reports/index.zh-CN.md) | [英文全量报告](./report.md) | [管理摘要](./reports/management-summary.zh-CN.md) | [SOC 摘要](./reports/soc-summary.zh-CN.md)",
             "",
         ])
     lines.extend([
         "> 本报告严格受证据约束：观测事实、推断和归因分开展示；证据不足时保持待定。",
         "> 所有证据 ID 都可跳转到详细证据块，每个证据块都链接到实际采集产物。",
         "",
+    ])
+    lines.extend(top_conclusion_lines_zh_cn(ctx, maybe_redact, case_dir=case_dir, limit=3))
+    lines.extend([
         "## 快速链接",
+        "- [核心结论](#report-conclusion)",
         "- [元数据](#report-metadata)",
         "- [执行摘要](#report-executive-summary)",
         "- [关键风险](#report-key-risks)",
@@ -1634,10 +2082,10 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
         "## 时间归一化",
         f"- **报告归一化时区：** `{maybe_redact(ctx['report_timezone_basis'])}`",
         f"- **主机报告时区：** `{maybe_redact(str(time_norm.get('host_reported_timezone', 'unknown')))}`",
-        f"- **主机 NTP 同步：** `{maybe_redact(str(time_norm.get('host_ntp_synchronized', 'unknown')))}`",
+        f"- **主机 NTP 同步：** `{maybe_redact_zh(str(time_norm.get('host_ntp_synchronized', 'unknown')))}`",
         f"- **事件时间字段：** `{maybe_redact(str(time_norm.get('event_time_field', 'unknown')))}`",
         f"- **时钟偏差评估：** `{maybe_redact(str(time_norm.get('clock_offset_assessment', 'unknown')))}`",
-        f"- **时区语义说明：** {maybe_redact(ctx['timezone_semantics'])}",
+        f"- **时区语义说明：** {maybe_redact_zh(ctx['timezone_semantics'])}",
         "",
         anchor_tag("report-trust-bootstrap"),
         "## 信任引导",
@@ -1658,7 +2106,7 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
         "## 权限范围",
         f"- **当前用户：** `{maybe_redact(str(privilege_scope.get('user', 'unknown')))}`",
         f"- **当前 UID：** `{maybe_redact(str(privilege_scope.get('uid', 'unknown')))}`",
-        f"- **是否可见免密 sudo：** `{maybe_redact(str(privilege_scope.get('passwordless_sudo_visible', 'unknown')))}`",
+        f"- **是否可见免密 sudo：** `{maybe_redact_zh(str(privilege_scope.get('passwordless_sudo_visible', 'unknown')))}`",
         "- **解释：** 若当前权限受限，则未观察到更深层指标不能视为其不存在。",
         "",
         anchor_tag("report-scene-snapshot"),
@@ -1669,7 +2117,7 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
         f"- **网络 IOC 命中数：** `{scene_reconstruction.get('network_ioc_hit_count', 0)}`",
         f"- **初始访问复核命中数：** `{scene_reconstruction.get('initial_access_review_hit_count', 0)}`",
         f"- **容器 / 云侧复核命中数：** `{scene_reconstruction.get('container_cloud_review_hit_count', 0)}`",
-        f"- **Kernel / eBPF 复核命中数：** `{scene_reconstruction.get('kernel_review_hit_count', 0)}`",
+        f"- **内核 / eBPF 复核命中数：** `{scene_reconstruction.get('kernel_review_hit_count', 0)}`",
         "",
     ])
     append_sample_section_zh_cn(lines, "认证来源 IP", as_list(scene_reconstruction.get("auth_source_ips")), limit=12)
@@ -1678,7 +2126,7 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
     append_sample_section_zh_cn(lines, "网络 IOC 样本", as_list(scene_reconstruction.get("network_ioc_samples")), limit=8)
     append_sample_section_zh_cn(lines, "初始访问复核样本", as_list(scene_reconstruction.get("initial_access_review_samples")), limit=10)
     append_sample_section_zh_cn(lines, "容器 / 云侧复核样本", as_list(scene_reconstruction.get("container_cloud_review_samples")), limit=10)
-    append_sample_section_zh_cn(lines, "Kernel / eBPF 复核样本", as_list(scene_reconstruction.get("kernel_review_samples")), limit=10)
+    append_sample_section_zh_cn(lines, "内核 / eBPF 复核样本", as_list(scene_reconstruction.get("kernel_review_samples")), limit=10)
 
     lines.extend([
         "## 覆盖范围与误报控制",
@@ -1735,12 +2183,12 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
             status = finding_status(item, ctx["evid_idx"])
             lines.extend([
                 f"### {status_icon(status)} {item.get('id', 'unknown')}",
-                f"- **表述：** {maybe_redact(str(item.get('statement', '')) or '未提供。')}",
+                f"- **表述：** {maybe_redact_zh(str(item.get('statement', '')) or '未提供。')}",
                 f"- **结论类型：** `{claim_type_label_zh_cn(str(item.get('claim_type', '')))}`",
                 f"- **假设编号：** `{maybe_redact(str(item.get('hypothesis_id', '-') or '-'))}`",
                 f"- **置信度：** {confidence_icon(str(item.get('confidence', 'unknown')))} `{confidence_label_zh_cn(str(item.get('confidence', 'unknown')))}`",
                 f"- **状态：** `{status_label_zh_cn(status)}`",
-                f"- **置信度理由：** {maybe_redact(str(item.get('confidence_reason', '-') or '-'))}",
+                f"- **置信度理由：** {maybe_redact_zh(str(item.get('confidence_reason', '-') or '-'))}",
                 f"- **证据链：** {zh_evidence_refs(as_list(item.get('evidence_ids')))}",
                 "",
             ])
@@ -1772,7 +2220,7 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
                 f"### {status_icon(status)} {maybe_redact(str(item.get('ip', 'unknown')))}",
                 f"- **角色：** `{maybe_redact(str(item.get('role', 'unknown')))}`",
                 f"- **溯源状态：** `{status_label_zh_cn(status)}`",
-                f"- **说明：** {maybe_redact(str(item.get('reason', '未提供')))}",
+                f"- **说明：** {maybe_redact_zh(str(item.get('reason', '未提供')))}",
                 f"- **证据链：** {zh_evidence_refs(as_list(item.get('evidence_ids')))}",
                 "",
             ])
@@ -1793,7 +2241,7 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
             lines.extend([
                 f"### {icon} {maybe_redact(str(item.get('artifact', 'unknown')))}",
                 f"- **状态：** `{status_label_zh_cn(status)}`",
-                f"- **原因：** {maybe_redact(str(item.get('reason', '-')) or '-')}",
+                f"- **原因：** {maybe_redact_zh(str(item.get('reason', '-')) or '-')}",
                 f"- **证据链：** {zh_evidence_refs(as_list(item.get('evidence_ids')))}",
                 "",
             ])
@@ -1847,7 +2295,7 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
                 lines.append(f"- **产物文件：** [{artifact_name}]({href})")
             if artifact_path:
                 lines.append(f"- **产物路径：** `{maybe_redact(artifact_path)}`")
-            lines.append("- **导航：** [返回证据来源导航](#report-evidence-source-navigator) | [返回证据索引](#report-evidence-index) | [返回顶部](#report-top) | [案件索引](./reports/index.zh-CN.md) | [English Report](./report.md)")
+            lines.append("- **导航：** [返回证据来源导航](#report-evidence-source-navigator) | [返回证据索引](#report-evidence-index) | [返回顶部](#report-top) | [案件索引](./reports/index.zh-CN.md) | [英文全量报告](./report.md)")
             lines.extend([
                 "",
                 "**命令**",
@@ -1865,7 +2313,7 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
     lines.append("## 未知项与缺口")
     if ctx["unknowns"]:
         for item in ctx["unknowns"]:
-            lines.append(f"- {maybe_redact(str(item))}")
+            lines.append(f"- {maybe_redact_zh(str(item))}")
     else:
         lines.append("- 未提供。")
     lines.append("")
@@ -1887,7 +2335,7 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
     lines.extend([
         "",
         "## 页脚",
-        "- [返回顶部](#report-top) | [案件索引](./reports/index.zh-CN.md) | [English Report](./report.md) | [管理摘要](./reports/management-summary.zh-CN.md) | [SOC 摘要](./reports/soc-summary.zh-CN.md)",
+        "- [返回顶部](#report-top) | [案件索引](./reports/index.zh-CN.md) | [英文全量报告](./report.md) | [管理摘要](./reports/management-summary.zh-CN.md) | [SOC 摘要](./reports/soc-summary.zh-CN.md)",
         "",
     ])
     return "\n".join(lines).strip() + "\n", warnings
@@ -1908,12 +2356,12 @@ def write_companion_reports(case_dir: str | None, data: dict[str, Any], redact: 
 
     outputs = {
         reports_dir / "index.md": build_case_bundle_index(data, case_dir=case_dir),
-        reports_dir / "index.zh-CN.md": build_case_bundle_index_zh_cn(data, case_dir=case_dir),
+        reports_dir / "index.zh-CN.md": finalize_zh_markdown(build_case_bundle_index_zh_cn(data, case_dir=case_dir)),
         reports_dir / "management-summary.md": build_management_view(data, redact=redact, case_dir=case_dir),
-        reports_dir / "management-summary.zh-CN.md": build_management_view_zh_cn(data, redact=redact, case_dir=case_dir),
+        reports_dir / "management-summary.zh-CN.md": finalize_zh_markdown(build_management_view_zh_cn(data, redact=redact, case_dir=case_dir)),
         reports_dir / "soc-summary.md": build_soc_view(data, redact=redact, case_dir=case_dir),
-        reports_dir / "soc-summary.zh-CN.md": build_soc_view_zh_cn(data, redact=redact, case_dir=case_dir),
-        case_root / "report.zh-CN.md": report_zh,
+        reports_dir / "soc-summary.zh-CN.md": finalize_zh_markdown(build_soc_view_zh_cn(data, redact=redact, case_dir=case_dir)),
+        case_root / "report.zh-CN.md": finalize_zh_markdown(report_zh),
     }
     written: list[str] = []
     for out_path, body in outputs.items():
