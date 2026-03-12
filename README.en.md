@@ -42,6 +42,14 @@ You can add control constraints directly in plain language:
 4. **Confidence-Gated Conclusion**: output confirmed vs inconclusive without fabrication.
 5. **Approval-Gated Response**: provide response plan only; no automatic mutation.
 
+## Key Auto-Parsing Capabilities
+
+- Maps top-CPU processes to executable paths and command lines (PID -> exe -> cmdline).
+- Extracts miner runtime fields automatically: `algorithm`, `pool`, `proxy`, `wallet`, `password`, `cpu-threads`.
+- Parses suspicious runtime commands from systemd `ExecStart` and cron/crontab entries.
+- Captures command-missing/fallback markers and makes visibility limits explicit in reports.
+- Surfaces runtime profile highlights at the beginning of reports to reduce manual triage time.
+
 ## Output Layout
 
 By default, case bundles are created under the current working directory:

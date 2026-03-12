@@ -295,6 +295,24 @@ def localize_auto_text_zh_cn(text: str) -> str:
             re.compile(r"^Authentication pressure observed \(failed=(\d+), invalid=(\d+)\)\.$"),
             lambda m: f"认证压力已观察到（失败密码 {m.group(1)} 次，无效用户 {m.group(2)} 次）。",
         ),
+        (
+            re.compile(
+                r"^Top-CPU process mapping captured (\d+) process-to-command record\(s\), with (\d+) miner-keyword hit\(s\) in command or executable fields\.$"
+            ),
+            lambda m: f"高 CPU 进程映射共捕获 {m.group(1)} 条进程-命令记录，其中 {m.group(2)} 条在命令或可执行路径中命中矿工关键字。",
+        ),
+        (
+            re.compile(
+                r"^Runtime parameter extraction recovered (\d+) miner-like command profile\(s\) with explicit algorithm/pool/proxy/wallet/password/thread fields\.$"
+            ),
+            lambda m: f"运行参数解析共恢复 {m.group(1)} 条矿工类命令画像，已提取算法、矿池、代理、钱包、密码和线程等字段。",
+        ),
+        (
+            re.compile(
+                r"^Command fallback markers were observed (\d+) time\(s\), indicating missing or unavailable primary tooling on at least one probe path\.$"
+            ),
+            lambda m: f"命令降级标记共出现 {m.group(1)} 次，表示至少一条探测路径存在主工具缺失或不可用。",
+        ),
     ]
     for pattern, renderer in pattern_rules:
         match = pattern.match(value)
@@ -1232,8 +1250,10 @@ def overall_confidence_posture(ctx: dict[str, Any]) -> str:
     medium = safe_int(confidence_counts.get("medium", 0))
     low = safe_int(confidence_counts.get("low", 0))
     scene = ctx["scene_reconstruction"]
-    direct_hits = safe_int(scene.get("process_ioc_match_count", 0)) + safe_int(
-        scene.get("network_ioc_hit_count", 0)
+    direct_hits = (
+        safe_int(scene.get("process_ioc_match_count", 0))
+        + safe_int(scene.get("network_ioc_hit_count", 0))
+        + safe_int(scene.get("runtime_profile_count", 0))
     )
     if direct_hits > 0:
         return "high" if high >= max(1, low) else "medium"
@@ -1251,6 +1271,7 @@ def investigation_posture_payload(ctx: dict[str, Any]) -> dict[str, Any]:
     process_hits = safe_int(scene.get("process_ioc_match_count", 0))
     network_hits = safe_int(scene.get("network_ioc_hit_count", 0))
     gpu_hits = safe_int(scene.get("gpu_suspicious_process_count", 0))
+    runtime_profile_hits = safe_int(scene.get("runtime_profile_count", 0))
     access_hits = safe_int(scene.get("initial_access_review_hit_count", 0))
     container_hits = safe_int(scene.get("container_cloud_review_hit_count", 0))
     kernel_hits = safe_int(scene.get("kernel_review_hit_count", 0))
@@ -1259,7 +1280,7 @@ def investigation_posture_payload(ctx: dict[str, Any]) -> dict[str, Any]:
     )
     posture = overall_confidence_posture(ctx)
 
-    if process_hits or network_hits or gpu_hits:
+    if process_hits or network_hits or gpu_hits or runtime_profile_hits:
         verdict = "Direct miner-like runtime indicators were observed during collection."
         boundary = "Triage should proceed as a compromise-oriented case, but attribution still requires additional evidence."
         focus = "Prioritize runtime lineage, parent-child process review, wallet/pool traces, and persistence pivots."
@@ -1283,6 +1304,7 @@ def investigation_posture_payload(ctx: dict[str, Any]) -> dict[str, Any]:
         "process_hits": process_hits,
         "network_hits": network_hits,
         "gpu_hits": gpu_hits,
+        "runtime_profile_hits": runtime_profile_hits,
         "access_hits": access_hits,
         "container_hits": container_hits,
         "kernel_hits": kernel_hits,
@@ -1369,6 +1391,7 @@ def render_hypothesis_matrix_section_zh_cn(
     title_map = {
         "CPU runtime miner hypothesis": "CPU 运行时挖矿假设",
         "GPU runtime miner hypothesis": "GPU 运行时挖矿假设",
+        "Parsed miner runtime profile hypothesis": "矿工运行参数画像假设",
         "Credential or initial-access abuse hypothesis": "凭据或初始访问滥用假设",
         "Persistence foothold hypothesis": "持久化落点假设",
         "Network IOC and outbound control hypothesis": "网络 IOC 与外联控制假设",
@@ -1408,6 +1431,7 @@ def top_conclusion_lines(
     process_hits = posture_info["process_hits"]
     network_hits = posture_info["network_hits"]
     gpu_hits = posture_info["gpu_hits"]
+    runtime_profile_hits = posture_info.get("runtime_profile_hits", 0)
     access_hits = posture_info["access_hits"]
     container_hits = posture_info["container_hits"]
     kernel_hits = posture_info["kernel_hits"]
@@ -1417,6 +1441,14 @@ def top_conclusion_lines(
     expected_workload = maybe_redact(ctx["expected_workload"] or "not provided")
     observed_uid = str(ctx["privilege_scope"].get("uid", "unknown")).strip() or "unknown"
 
+    scene = ctx["scene_reconstruction"]
+    runtime_profiles = [as_dict(x) for x in as_list(scene.get("runtime_profiles"))]
+    runtime_algorithms = as_list(scene.get("runtime_algorithms"))
+    runtime_pools = as_list(scene.get("runtime_pools"))
+    runtime_proxies = as_list(scene.get("runtime_proxies"))
+    runtime_wallets = as_list(scene.get("runtime_wallets"))
+    runtime_passwords = as_list(scene.get("runtime_passwords"))
+    runtime_cpu_threads = as_list(scene.get("runtime_cpu_threads"))
     lines = [
         anchor_tag("report-conclusion"),
         "## Investigation Conclusion",
@@ -1427,11 +1459,39 @@ def top_conclusion_lines(
         f"- **Read-Only Scope:** `0` state-changing actions executed during this collection.",
         "",
         "### Evidence Basis",
-        f"- **Runtime Indicators:** process IOC hits `{process_hits}`, network IOC hits `{network_hits}`, GPU suspicious-process hits `{gpu_hits}`.",
+        f"- **Runtime Indicators:** process IOC hits `{process_hits}`, network IOC hits `{network_hits}`, GPU suspicious-process hits `{gpu_hits}`, parsed runtime profiles `{runtime_profile_hits}`.",
         f"- **Review Surfaces:** initial access `{access_hits}`, container/cloud `{container_hits}`, kernel/eBPF `{kernel_hits}`.",
         f"- **Finding State:** `{ctx['confirmed_count']}` confirmed, `{ctx['inconclusive_count']}` inconclusive.",
         f"- **Expected Workload Context:** {expected_workload}.",
     ]
+    if runtime_profiles:
+        lines.extend(
+            [
+                "",
+                "### Auto-Parsed Miner Runtime Profile",
+                f"- **Algorithms:** {maybe_redact(shorten_list(runtime_algorithms, limit=6))}",
+                f"- **Pools:** {maybe_redact(shorten_list(runtime_pools, limit=4))}",
+                f"- **Proxies:** {maybe_redact(shorten_list(runtime_proxies, limit=4))}",
+                f"- **Wallets:** {maybe_redact(shorten_list(runtime_wallets, limit=4))}",
+                f"- **Passwords:** {maybe_redact(shorten_list(runtime_passwords, limit=4))}",
+                f"- **CPU Threads / Affinity:** {maybe_redact(shorten_list(runtime_cpu_threads, limit=4))}",
+                "- **Profile Samples:**",
+            ]
+        )
+        for profile in runtime_profiles[:3]:
+            evidence_id = str(profile.get("evidence_id", "")).strip()
+            chain = compact_evidence_chain([evidence_id] if evidence_id else [], ctx["evid_idx"], case_dir, limit=1)
+            lines.append(
+                f"  - exe=`{maybe_redact(str(profile.get('executable', '') or '-'))}` "
+                f"algo=`{maybe_redact(str(profile.get('algorithm', '') or '-'))}` "
+                f"pool=`{maybe_redact(str(profile.get('pool', '') or '-'))}` "
+                f"proxy=`{maybe_redact(str(profile.get('proxy', '') or '-'))}` "
+                f"wallet=`{maybe_redact(str(profile.get('wallet', '') or '-'))}` "
+                f"password=`{maybe_redact(str(profile.get('password', '') or '-'))}` "
+                f"cpu_threads=`{maybe_redact(str(profile.get('cpu_threads', '') or '-'))}` "
+                f"origin=`{maybe_redact(str(profile.get('origin_path', '') or '-'))}:{maybe_redact(str(profile.get('origin_line', '') or '-'))}` "
+                f"| evidence: {chain}"
+            )
     if top_items:
         lines.append("- **Highest-Signal Judgments:**")
         for item in top_items:
@@ -1467,6 +1527,7 @@ def top_conclusion_lines_zh_cn(
     process_hits = posture_info["process_hits"]
     network_hits = posture_info["network_hits"]
     gpu_hits = posture_info["gpu_hits"]
+    runtime_profile_hits = posture_info.get("runtime_profile_hits", 0)
     access_hits = posture_info["access_hits"]
     container_hits = posture_info["container_hits"]
     kernel_hits = posture_info["kernel_hits"]
@@ -1475,6 +1536,14 @@ def top_conclusion_lines_zh_cn(
     top_items = top_judgments(ctx["findings"], ctx["evid_idx"], limit=limit)
     expected_workload = maybe_redact(ctx["expected_workload"] or "未提供")
     observed_uid = str(ctx["privilege_scope"].get("uid", "unknown")).strip() or "unknown"
+    scene = ctx["scene_reconstruction"]
+    runtime_profiles = [as_dict(x) for x in as_list(scene.get("runtime_profiles"))]
+    runtime_algorithms = as_list(scene.get("runtime_algorithms"))
+    runtime_pools = as_list(scene.get("runtime_pools"))
+    runtime_proxies = as_list(scene.get("runtime_proxies"))
+    runtime_wallets = as_list(scene.get("runtime_wallets"))
+    runtime_passwords = as_list(scene.get("runtime_passwords"))
+    runtime_cpu_threads = as_list(scene.get("runtime_cpu_threads"))
     posture_label = {
         "high": "高",
         "medium": "中",
@@ -1500,11 +1569,39 @@ def top_conclusion_lines_zh_cn(
         "- **只读约束：** 本次采集未执行任何状态变更命令。",
         "",
         "### 证据依据",
-        f"- **运行时指标：** 进程 IOC 命中 `{process_hits}`，网络 IOC 命中 `{network_hits}`，GPU 可疑进程命中 `{gpu_hits}`。",
+        f"- **运行时指标：** 进程 IOC 命中 `{process_hits}`，网络 IOC 命中 `{network_hits}`，GPU 可疑进程命中 `{gpu_hits}`，运行参数画像 `{runtime_profile_hits}`。",
         f"- **复核面：** 初始访问 `{access_hits}`，容器/云 `{container_hits}`，内核/eBPF `{kernel_hits}`。",
         f"- **研判状态：** 已确认 `{ctx['confirmed_count']}` 条，待定 `{ctx['inconclusive_count']}` 条。",
         f"- **业务上下文：** 预期工作负载 {expected_workload}。",
     ]
+    if runtime_profiles:
+        lines.extend(
+            [
+                "",
+                "### 自动解析的矿工运行参数",
+                f"- **算法：** {maybe_redact(shorten_list(runtime_algorithms, limit=6))}",
+                f"- **矿池：** {maybe_redact(shorten_list(runtime_pools, limit=4))}",
+                f"- **代理：** {maybe_redact(shorten_list(runtime_proxies, limit=4))}",
+                f"- **钱包：** {maybe_redact(shorten_list(runtime_wallets, limit=4))}",
+                f"- **链接密码：** {maybe_redact(shorten_list(runtime_passwords, limit=4))}",
+                f"- **CPU 线程/绑核：** {maybe_redact(shorten_list(runtime_cpu_threads, limit=4))}",
+                "- **画像样本：**",
+            ]
+        )
+        for profile in runtime_profiles[:3]:
+            evidence_id = str(profile.get("evidence_id", "")).strip()
+            chain = compact_evidence_chain_zh_cn([evidence_id] if evidence_id else [], ctx["evid_idx"], case_dir, limit=1)
+            lines.append(
+                f"  - exe=`{maybe_redact(str(profile.get('executable', '') or '-'))}` "
+                f"algo=`{maybe_redact(str(profile.get('algorithm', '') or '-'))}` "
+                f"pool=`{maybe_redact(str(profile.get('pool', '') or '-'))}` "
+                f"proxy=`{maybe_redact(str(profile.get('proxy', '') or '-'))}` "
+                f"wallet=`{maybe_redact(str(profile.get('wallet', '') or '-'))}` "
+                f"password=`{maybe_redact(str(profile.get('password', '') or '-'))}` "
+                f"cpu_threads=`{maybe_redact(str(profile.get('cpu_threads', '') or '-'))}` "
+                f"origin=`{maybe_redact(str(profile.get('origin_path', '') or '-'))}:{maybe_redact(str(profile.get('origin_line', '') or '-'))}` "
+                f"| 证据：{chain}"
+            )
     if top_items:
         lines.append("- **高信号研判：**")
         for item in top_items:
@@ -1557,6 +1654,45 @@ def append_sample_section(
     else:
         lines.append("- None.")
     lines.append("")
+
+
+def render_runtime_profile_samples(items: list[dict[str, Any]], limit: int = 8) -> list[str]:
+    rows: list[str] = []
+    for item in items[:limit]:
+        rows.append(
+            " | ".join(
+                [
+                    f"exe={item.get('executable', '-')}",
+                    f"algo={item.get('algorithm', '-')}",
+                    f"pool={item.get('pool', '-')}",
+                    f"proxy={item.get('proxy', '-')}",
+                    f"wallet={item.get('wallet', '-')}",
+                    f"pass={item.get('password', '-')}",
+                    f"threads={item.get('cpu_threads', '-')}",
+                    f"origin={item.get('origin_path', '-')}"
+                    + (f":{item.get('origin_line', '-')}" if str(item.get("origin_line", "")).strip() else ""),
+                ]
+            )
+        )
+    return rows
+
+
+def render_top_process_samples(items: list[dict[str, Any]], limit: int = 8) -> list[str]:
+    rows: list[str] = []
+    for item in items[:limit]:
+        rows.append(
+            " | ".join(
+                [
+                    f"pid={item.get('pid', '-')}",
+                    f"user={item.get('user', '-')}",
+                    f"cpu={item.get('cpu_percent', '-')}",
+                    f"mem={item.get('mem_percent', '-')}",
+                    f"exe={item.get('executable', '-')}",
+                    f"cmd={item.get('command', '-')}",
+                ]
+            )
+        )
+    return rows
 
 
 def append_checkpoint_section(
@@ -1838,10 +1974,15 @@ def build_report(data: dict[str, Any], redact: bool, strict: bool, case_dir: str
         f"- **Auth Source IP Count:** `{len(as_list(scene_reconstruction.get('auth_source_ips')))}`",
         f"- **Listening Port Count:** `{len(as_list(scene_reconstruction.get('listening_ports')))}`",
         f"- **Process IOC Hit Count:** `{scene_reconstruction.get('process_ioc_match_count', 0)}`",
+        f"- **Top-CPU Process Count:** `{scene_reconstruction.get('top_cpu_process_count', 0)}`",
+        f"- **Top-CPU Miner-Keyword Hit Count:** `{scene_reconstruction.get('top_cpu_process_keyword_hit_count', 0)}`",
         f"- **Network IOC Hit Count:** `{scene_reconstruction.get('network_ioc_hit_count', 0)}`",
         f"- **Initial-Access Review Hit Count:** `{scene_reconstruction.get('initial_access_review_hit_count', 0)}`",
         f"- **Container / Cloud Review Hit Count:** `{scene_reconstruction.get('container_cloud_review_hit_count', 0)}`",
         f"- **Kernel / eBPF Review Hit Count:** `{scene_reconstruction.get('kernel_review_hit_count', 0)}`",
+        f"- **Runtime Profile Count:** `{scene_reconstruction.get('runtime_profile_count', 0)}`",
+        f"- **Cron Runtime Candidate Count:** `{scene_reconstruction.get('cron_runtime_candidate_count', 0)}`",
+        f"- **Command Fallback Marker Count:** `{scene_reconstruction.get('command_fallback_marker_count', 0)}`",
         f"- **GPU Probe Count:** `{len(as_list(scene_reconstruction.get('gpu_probe_ids')))}`",
         f"- **GPU Peak Utilization:** `{scene_reconstruction.get('gpu_peak_utilization_percent', 0)}%`",
         f"- **GPU Compute Process Count:** `{scene_reconstruction.get('gpu_compute_process_count', 0)}`",
@@ -1851,6 +1992,9 @@ def build_report(data: dict[str, Any], redact: bool, strict: bool, case_dir: str
     append_sample_section(lines, "Auth Source IPs", as_list(scene_reconstruction.get("auth_source_ips")), maybe_redact, limit=12)
     append_sample_section(lines, "Listening Ports", as_list(scene_reconstruction.get("listening_ports")), maybe_redact, limit=12)
     append_sample_section(lines, "Process IOC Samples", as_list(scene_reconstruction.get("process_ioc_samples")), maybe_redact, limit=8)
+    append_sample_section(lines, "Top CPU Process Samples", render_top_process_samples([as_dict(x) for x in as_list(scene_reconstruction.get("top_cpu_processes"))]), maybe_redact, limit=8)
+    append_sample_section(lines, "Runtime Profile Samples", render_runtime_profile_samples([as_dict(x) for x in as_list(scene_reconstruction.get("runtime_profiles"))]), maybe_redact, limit=8)
+    append_sample_section(lines, "Cron Runtime Candidate Samples", render_runtime_profile_samples([as_dict(x) for x in as_list(scene_reconstruction.get("cron_runtime_candidates"))]), maybe_redact, limit=8)
     append_sample_section(lines, "Network IOC Samples", as_list(scene_reconstruction.get("network_ioc_samples")), maybe_redact, limit=8)
     append_sample_section(lines, "Initial-Access Review Samples", as_list(scene_reconstruction.get("initial_access_review_samples")), maybe_redact, limit=10)
     append_sample_section(lines, "Container / Cloud Review Samples", as_list(scene_reconstruction.get("container_cloud_review_samples")), maybe_redact, limit=10)
@@ -1870,7 +2014,6 @@ def build_report(data: dict[str, Any], redact: bool, strict: bool, case_dir: str
     if baseline_assessment:
         lines.append(f"- **Baseline Assessment:** `{maybe_redact(str(baseline_assessment.get('assessment_status', 'unknown')))}`")
     lines.append("")
-
     render_hypothesis_matrix_section(
         lines,
         ctx["hypothesis_matrix"],
@@ -2274,10 +2417,15 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
         f"- **认证来源 IP 数量：** `{len(as_list(scene_reconstruction.get('auth_source_ips')))}`",
         f"- **监听端口数量：** `{len(as_list(scene_reconstruction.get('listening_ports')))}`",
         f"- **进程 IOC 命中数：** `{scene_reconstruction.get('process_ioc_match_count', 0)}`",
+        f"- **高 CPU 进程数量：** `{scene_reconstruction.get('top_cpu_process_count', 0)}`",
+        f"- **高 CPU 进程矿工关键字命中数：** `{scene_reconstruction.get('top_cpu_process_keyword_hit_count', 0)}`",
         f"- **网络 IOC 命中数：** `{scene_reconstruction.get('network_ioc_hit_count', 0)}`",
         f"- **初始访问复核命中数：** `{scene_reconstruction.get('initial_access_review_hit_count', 0)}`",
         f"- **容器 / 云侧复核命中数：** `{scene_reconstruction.get('container_cloud_review_hit_count', 0)}`",
         f"- **内核 / eBPF 复核命中数：** `{scene_reconstruction.get('kernel_review_hit_count', 0)}`",
+        f"- **运行参数画像数量：** `{scene_reconstruction.get('runtime_profile_count', 0)}`",
+        f"- **定时任务运行候选数量：** `{scene_reconstruction.get('cron_runtime_candidate_count', 0)}`",
+        f"- **命令降级标记数量：** `{scene_reconstruction.get('command_fallback_marker_count', 0)}`",
         f"- **GPU 探针数量：** `{len(as_list(scene_reconstruction.get('gpu_probe_ids')))}`",
         f"- **GPU 峰值利用率：** `{scene_reconstruction.get('gpu_peak_utilization_percent', 0)}%`",
         f"- **GPU 计算进程数量：** `{scene_reconstruction.get('gpu_compute_process_count', 0)}`",
@@ -2287,6 +2435,9 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
     append_sample_section_zh_cn(lines, "认证来源 IP", as_list(scene_reconstruction.get("auth_source_ips")), limit=12)
     append_sample_section_zh_cn(lines, "监听端口", as_list(scene_reconstruction.get("listening_ports")), limit=12)
     append_sample_section_zh_cn(lines, "进程 IOC 样本", as_list(scene_reconstruction.get("process_ioc_samples")), limit=8)
+    append_sample_section_zh_cn(lines, "高 CPU 进程样本", render_top_process_samples([as_dict(x) for x in as_list(scene_reconstruction.get("top_cpu_processes"))]), limit=8)
+    append_sample_section_zh_cn(lines, "运行参数画像样本", render_runtime_profile_samples([as_dict(x) for x in as_list(scene_reconstruction.get("runtime_profiles"))]), limit=8)
+    append_sample_section_zh_cn(lines, "定时任务运行候选样本", render_runtime_profile_samples([as_dict(x) for x in as_list(scene_reconstruction.get("cron_runtime_candidates"))]), limit=8)
     append_sample_section_zh_cn(lines, "网络 IOC 样本", as_list(scene_reconstruction.get("network_ioc_samples")), limit=8)
     append_sample_section_zh_cn(lines, "初始访问复核样本", as_list(scene_reconstruction.get("initial_access_review_samples")), limit=10)
     append_sample_section_zh_cn(lines, "容器 / 云侧复核样本", as_list(scene_reconstruction.get("container_cloud_review_samples")), limit=10)

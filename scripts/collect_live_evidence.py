@@ -244,6 +244,12 @@ BASE_PROBES = [
     Probe(
         "process",
         "if command -v ps >/dev/null 2>&1; then "
+        "ps -eo pid,ppid,user,etimes,%cpu,%mem,comm,args --sort=-%mem | head -n 80; "
+        "else echo 'ps_missing'; fi",
+    ),
+    Probe(
+        "process",
+        "if command -v ps >/dev/null 2>&1; then "
         "ps aux | grep -Ei 'miner|xmrig|lolminer|trex|gminer|nbminer|clash|autossh|h32|h64|\\-zsh' | grep -v grep; "
         "else "
         "for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do "
@@ -280,6 +286,12 @@ BASE_PROBES = [
     Probe("persistence", "find /etc/cron* -maxdepth 3 -type f -printf '%TY-%Tm-%Td %TH:%TM %p\\n' 2>/dev/null | sort"),
     Probe("persistence", "grep -RniE '(kawpow|xmrig|gminer|lolminer|trex|nbminer|stratum|https?_proxy=|all_proxy=|clash|autossh|h32|h64|\\-zsh)' /etc/cron* 2>/dev/null | head -n 120 || true"),
     Probe("persistence", "crontab -l 2>/dev/null || true"),
+    Probe(
+        "persistence",
+        "for f in /etc/crontab /etc/cron.d/* /var/spool/cron/* /var/spool/cron/crontabs/*; do "
+        "[ -f \"$f\" ] || continue; echo \"## $f\"; sed -n '1,120p' \"$f\"; "
+        "done 2>/dev/null | head -n 1200 || true",
+    ),
     Probe("service", RUNNING_SERVICES_CMD),
     Probe("service", SERVICE_TIMER_CMD),
     Probe("container", "docker ps --format '{{.ID}}\\t{{.Image}}\\t{{.Names}}\\t{{.Status}}' 2>/dev/null || true"),

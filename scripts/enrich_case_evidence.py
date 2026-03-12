@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shlex
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,28 @@ GPU_COMPUTE_APP_RE = re.compile(
     r"^\s*(?P<pid>\d+)\s*,\s*(?P<process>[^,]+)\s*,\s*(?P<gpu_uuid>[^,]+)\s*,\s*(?P<mem>[^,]+)\s*$"
 )
 MINER_KEYWORD_RE = re.compile(r"(miner|xmrig|gminer|lolminer|trex|nbminer|stratum|kawpow)", re.I)
+FALLBACK_MARKER_RE = re.compile(
+    r"(?:\b\w+_missing\b|\b\w+_unavailable\b|tools_missing|sha256sum unavailable|journalctl_missing|ps_missing)",
+    re.I,
+)
+PS_AUX_RE = re.compile(
+    r"^\s*(?P<user>\S+)\s+(?P<pid>\d+)\s+(?P<cpu>-?\d+(?:\.\d+)?)\s+(?P<mem>-?\d+(?:\.\d+)?)\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+(?P<cmd>.+)$"
+)
+PS_EXTENDED_RE = re.compile(
+    r"^\s*(?P<pid>[0-9]+)\s+(?P<ppid>[0-9]+)\s+(?P<user>\S+)\s+\w{3}\s+\w{3}\s+[0-9]+\s+[0-9]{2}:[0-9]{2}:[0-9]{2}\s+[0-9]{4}\s+\S+\s+(?P<cpu>-?[0-9]+(?:\.[0-9]+)?)\s+(?P<mem>-?[0-9]+(?:\.[0-9]+)?)\s+\S+\s+(?P<args>.+)$"
+)
+PROC_EXE_MAP_RE = re.compile(r"^\s*(?P<pid>\d+)\|(?P<exe>[^|]+)\|(?P<cmd>.*)$")
+PROC_FALLBACK_RE = re.compile(r"^\s*(?P<pid>\d+)\|(?P<state>[A-Za-z])\|(?P<cmd>.+)$")
+GREP_CTX_RE = re.compile(r"^(?P<path>[^:\n]+):(?P<line>\d+):(?P<body>.*)$")
+IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+RUNTIME_HINT_RE = re.compile(
+    r"(?:\bxmrig\b|\bgminer\b|\blolminer\b|\btrex\b|\bnbminer\b|\bsrb\b|\bstratum(?:\+|://)?\b|"
+    r"--algorithm\b|--algo\b|\bkawpow\b|\brandomx\b|\bethash\b|\betchash\b|"
+    r"--pool\b|--wallet\b|--proxy\b|--cpu-threads\b|--threads\b|\bcpu-threads\b)",
+    re.I,
+)
+CRON_AT_RE = re.compile(r"^@(reboot|yearly|annually|monthly|weekly|daily|midnight|hourly)$", re.I)
+CRON_FIELD_RE = re.compile(r"^[\d*/,\-A-Za-z]+$")
 
 
 def now_utc() -> str:
@@ -98,6 +121,244 @@ def parse_int_from_text(value: str) -> int | None:
         return int(m.group(1))
     except ValueError:
         return None
+
+
+def compact_space(value: str) -> str:
+    return " ".join((value or "").split()).strip()
+
+
+def safe_shlex_split(value: str) -> list[str]:
+    text = (value or "").strip()
+    if not text:
+        return []
+    try:
+        return shlex.split(text)
+    except ValueError:
+        return text.split()
+
+
+def parse_endpoint(value: str) -> tuple[str, str, str]:
+    text = (value or "").strip().strip("'\"").rstrip(",;")
+    if not text:
+        return "", "", ""
+    if "://" in text:
+        text = text.split("://", 1)[1]
+    if "@" in text:
+        text = text.rsplit("@", 1)[1]
+    text = text.split("/", 1)[0]
+    host = text
+    port = ""
+    if text.startswith("[") and "]" in text:
+        host = text[1 : text.index("]")]
+        rest = text[text.index("]") + 1 :]
+        if rest.startswith(":") and rest[1:].isdigit():
+            port = rest[1:]
+    elif text.count(":") == 1 and text.rsplit(":", 1)[1].isdigit():
+        host, port = text.rsplit(":", 1)
+    ip = host if IPV4_RE.fullmatch(host) else ""
+    return text, host, port if port else ""
+
+
+def parse_grep_context_line(line: str) -> tuple[str, str, str]:
+    m = GREP_CTX_RE.match(line.strip())
+    if not m:
+        return "", "", line.strip()
+    return m.group("path").strip(), m.group("line").strip(), m.group("body").strip()
+
+
+def normalize_execstart_command(line_body: str) -> str:
+    text = compact_space(line_body)
+    if "ExecStart=" in text:
+        text = text.split("ExecStart=", 1)[1].strip()
+    argv_match = re.search(r"argv\[\]=([^;]+)", text)
+    if argv_match:
+        text = argv_match.group(1).strip()
+    return text.lstrip("-@").strip()
+
+
+def parse_cron_command(body: str) -> tuple[str, str]:
+    tokens = safe_shlex_split(body)
+    if not tokens:
+        return "", body
+    if CRON_AT_RE.match(tokens[0]):
+        schedule = tokens[0]
+        command = " ".join(tokens[2:]) if len(tokens) >= 3 else " ".join(tokens[1:])
+        return schedule, command.strip()
+    if len(tokens) >= 6 and all(CRON_FIELD_RE.match(tok) for tok in tokens[:5]):
+        if len(tokens) >= 7:
+            return " ".join(tokens[:5]), " ".join(tokens[6:]).strip()
+        return " ".join(tokens[:5]), " ".join(tokens[5:]).strip()
+    return "", body.strip()
+
+
+def parse_option_values(tokens: list[str]) -> dict[str, list[str]]:
+    opts: dict[str, list[str]] = {}
+
+    def token_can_be_value(tok: str) -> bool:
+        if not tok:
+            return False
+        if not tok.startswith("-"):
+            return True
+        return bool(re.fullmatch(r"-?\d+(?:\.\d+)?", tok) or re.fullmatch(r"-?0x[0-9a-fA-F]+", tok))
+
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok.startswith("--"):
+            if "=" in tok:
+                key, value = tok.split("=", 1)
+                opts.setdefault(key, []).append(value)
+            else:
+                value = ""
+                if i + 1 < len(tokens) and token_can_be_value(tokens[i + 1]):
+                    value = tokens[i + 1]
+                    i += 1
+                opts.setdefault(tok, []).append(value)
+        elif tok in {"-a", "-o", "-u", "-p", "-t", "-x"}:
+            value = ""
+            if i + 1 < len(tokens) and token_can_be_value(tokens[i + 1]):
+                value = tokens[i + 1]
+                i += 1
+            opts.setdefault(tok, []).append(value)
+        i += 1
+    return opts
+
+
+def first_option_value(options: dict[str, list[str]], keys: list[str]) -> str:
+    for key in keys:
+        values = options.get(key) or []
+        for value in values:
+            if str(value).strip():
+                return str(value).strip()
+    return ""
+
+
+def parse_runtime_profile_from_line(line: str, source: str, evidence_id: str) -> dict[str, Any] | None:
+    raw = line.strip()
+    if not raw:
+        return None
+
+    origin_path, origin_line, body = parse_grep_context_line(raw)
+    command_text = normalize_execstart_command(body or raw)
+    schedule = ""
+    if origin_path and "/cron" in origin_path:
+        schedule, command_text = parse_cron_command(command_text)
+    if " crontab " in command_text:
+        schedule = schedule or "dynamic_crontab"
+    if not RUNTIME_HINT_RE.search(command_text):
+        return None
+
+    tokens = safe_shlex_split(command_text)
+    if not tokens:
+        return None
+    options = parse_option_values(tokens)
+
+    executable = tokens[0] if tokens and not tokens[0].startswith("-") else ""
+    algorithm = first_option_value(options, ["--algorithm", "--algo", "-a"])
+    if not algorithm:
+        kw = re.search(r"\b(kawpow|randomx|ethash|etchash|rx/0|cn/\w+)\b", command_text, re.I)
+        algorithm = kw.group(1) if kw else ""
+    proxy_raw = first_option_value(options, ["--proxy", "--proxy-url"])
+    pool_raw = first_option_value(options, ["--pool", "--url", "-o"])
+    wallet = first_option_value(options, ["--wallet", "--user", "--username", "-u"])
+    password = first_option_value(options, ["--password", "--pass", "-p"])
+    cpu_threads = first_option_value(options, ["--cpu-threads", "--threads", "-t"])
+    cpu_affinity = first_option_value(options, ["--cpu-affinity", "--cpu-bind", "-x"])
+
+    if not pool_raw:
+        stratum = re.search(r"(stratum\+[A-Za-z0-9]+://[^\s'\";]+)", command_text, re.I)
+        pool_raw = stratum.group(1) if stratum else ""
+
+    pool_endpoint, pool_host, pool_port = parse_endpoint(pool_raw)
+    proxy_endpoint, proxy_host, proxy_port = parse_endpoint(proxy_raw)
+
+    if not any([algorithm, pool_endpoint, proxy_endpoint, wallet, password, cpu_threads, cpu_affinity]):
+        return None
+
+    wallet_base = wallet.split(".", 1)[0] if wallet else ""
+    worker_name = wallet.split(".", 1)[1] if wallet and "." in wallet else ""
+    return {
+        "source": source,
+        "evidence_id": evidence_id,
+        "origin_path": origin_path,
+        "origin_line": origin_line,
+        "schedule": schedule,
+        "command": compact_space(command_text),
+        "executable": executable,
+        "algorithm": algorithm.lower() if algorithm else "",
+        "proxy": proxy_endpoint,
+        "proxy_host": proxy_host,
+        "proxy_port": proxy_port,
+        "pool": pool_endpoint,
+        "pool_host": pool_host,
+        "pool_port": pool_port,
+        "wallet": wallet,
+        "wallet_base": wallet_base,
+        "worker_name": worker_name,
+        "password": password,
+        "cpu_threads": cpu_threads,
+        "cpu_affinity": cpu_affinity,
+    }
+
+
+def dedupe_runtime_profiles(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, ...]] = set()
+    out: list[dict[str, Any]] = []
+    for item in items:
+        key = (
+            str(item.get("executable", "")),
+            str(item.get("algorithm", "")),
+            str(item.get("proxy", "")),
+            str(item.get("pool", "")),
+            str(item.get("wallet", "")),
+            str(item.get("password", "")),
+            str(item.get("cpu_threads", "")),
+            str(item.get("origin_path", "")),
+            str(item.get("origin_line", "")),
+            str(item.get("schedule", "")),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
+def parse_top_process_line(line: str) -> dict[str, Any] | None:
+    raw = line.strip()
+    if not raw:
+        return None
+    m = PS_EXTENDED_RE.match(raw)
+    if m:
+        return {
+            "pid": m.group("pid"),
+            "ppid": m.group("ppid"),
+            "user": m.group("user"),
+            "cpu_percent": m.group("cpu"),
+            "mem_percent": m.group("mem"),
+            "command": compact_space(m.group("args")),
+        }
+    m = PS_AUX_RE.match(raw)
+    if m:
+        return {
+            "pid": m.group("pid"),
+            "ppid": "",
+            "user": m.group("user"),
+            "cpu_percent": m.group("cpu"),
+            "mem_percent": m.group("mem"),
+            "command": compact_space(m.group("cmd")),
+        }
+    m = PROC_FALLBACK_RE.match(raw)
+    if m:
+        return {
+            "pid": m.group("pid"),
+            "ppid": "",
+            "user": "",
+            "cpu_percent": "unknown",
+            "mem_percent": "unknown",
+            "command": compact_space(m.group("cmd")),
+        }
+    return None
 
 
 def finding_shape(
@@ -194,6 +455,13 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
     listen_ports: set[str] = set()
     trust_flags: set[str] = set()
     ioc_process_lines: list[str] = []
+    top_cpu_processes: list[dict[str, Any]] = []
+    process_exe_by_pid: dict[str, str] = {}
+    process_cmd_by_pid: dict[str, str] = {}
+    runtime_profiles: list[dict[str, Any]] = []
+    fallback_markers: list[str] = []
+    fallback_marker_ids: set[str] = set()
+    cron_runtime_candidates: list[dict[str, Any]] = []
     initial_access_review_hits: list[str] = []
     container_cloud_review_hits: list[str] = []
     network_ioc_hits: list[str] = []
@@ -251,6 +519,14 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
         stdout, _ = split_artifact_sections(text)
         exit_code = parse_exit_code(text)
 
+        for line in stdout.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if FALLBACK_MARKER_RE.search(stripped) and len(fallback_markers) < 80:
+                fallback_markers.append(stripped)
+                fallback_marker_ids.add(evid_id)
+
         if source == "auth":
             for line in stdout.splitlines():
                 m = AUTH_ACCEPT_RE.search(line)
@@ -299,12 +575,29 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
                     trust_flags.add("command_is_aliased")
                 if " is a function" in line:
                     trust_flags.add("command_is_shell_function")
+                if line.strip().endswith(": not_found"):
+                    trust_flags.add("critical_command_missing")
 
         if source == "process" and "grep -Ei 'miner|xmrig|lolminer|trex|gminer|nbminer|clash|autossh|h32|h64|\\-zsh'" in command:
             if exit_code == 0 and stdout.strip():
                 for ln in stdout.splitlines():
                     if ln.strip():
                         ioc_process_lines.append(ln.strip())
+
+        if source == "process":
+            for line in stdout.splitlines():
+                entry = parse_top_process_line(line)
+                if entry and len(top_cpu_processes) < 40:
+                    top_cpu_processes.append(entry)
+                m = PROC_EXE_MAP_RE.match(line.strip())
+                if m:
+                    pid = m.group("pid").strip()
+                    exe = m.group("exe").strip()
+                    cmdline = compact_space(m.group("cmd"))
+                    if pid:
+                        process_exe_by_pid[pid] = exe
+                        if cmdline:
+                            process_cmd_by_pid[pid] = cmdline
 
         if source == "gpu":
             gpu_probe_ids.add(evid_id)
@@ -373,6 +666,16 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
                 if line.strip() and len(network_ioc_hits) < 20:
                     network_ioc_hits.append(line.strip())
 
+        if source in {"process", "service", "persistence", "network_ioc", "binary_drop", "container", "cloud"}:
+            for line in stdout.splitlines():
+                profile = parse_runtime_profile_from_line(line, source, evid_id)
+                if not profile:
+                    continue
+                if len(runtime_profiles) < 120:
+                    runtime_profiles.append(profile)
+                if profile.get("schedule") and len(cron_runtime_candidates) < 40:
+                    cron_runtime_candidates.append(profile)
+
         if source == "privilege" and stdout.strip():
             for line in stdout.splitlines():
                 stripped = line.strip()
@@ -388,6 +691,28 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
                 if line.strip() and len(kernel_review_hits) < 20:
                     kernel_review_hits.append(line.strip())
 
+    runtime_profiles = dedupe_runtime_profiles(runtime_profiles)
+    for item in top_cpu_processes:
+        pid = str(item.get("pid", "")).strip()
+        if pid and pid in process_exe_by_pid:
+            item["executable"] = process_exe_by_pid[pid]
+        if pid and not item.get("command") and pid in process_cmd_by_pid:
+            item["command"] = process_cmd_by_pid[pid]
+        cmd_blob = f"{item.get('command', '')} {item.get('executable', '')}".strip()
+        item["miner_keyword_hit"] = bool(MINER_KEYWORD_RE.search(cmd_blob))
+    dedup_top: list[dict[str, Any]] = []
+    seen_top: set[str] = set()
+    for item in top_cpu_processes:
+        pid = str(item.get("pid", "")).strip()
+        if pid and pid in seen_top:
+            continue
+        if pid:
+            seen_top.add(pid)
+        dedup_top.append(item)
+        if len(dedup_top) >= 20:
+            break
+    top_cpu_processes = dedup_top
+
     ioc_blob = "\n".join(ioc_process_lines).lower()
     for item in gpu_compute_processes:
         pname = str(item.get("process", "")).strip()
@@ -395,6 +720,37 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
         pid_correlated = bool(pid and re.search(rf"(^|\\D){re.escape(pid)}(\\D|$)", ioc_blob))
         if MINER_KEYWORD_RE.search(pname) or pid_correlated:
             gpu_suspicious_processes.append(item)
+
+    runtime_algorithms = sorted({str(x.get("algorithm", "")).strip() for x in runtime_profiles if str(x.get("algorithm", "")).strip()})
+    runtime_pools = sorted({str(x.get("pool", "")).strip() for x in runtime_profiles if str(x.get("pool", "")).strip()})
+    runtime_proxies = sorted({str(x.get("proxy", "")).strip() for x in runtime_profiles if str(x.get("proxy", "")).strip()})
+    runtime_wallets = sorted({str(x.get("wallet", "")).strip() for x in runtime_profiles if str(x.get("wallet", "")).strip()})
+    runtime_passwords = sorted({str(x.get("password", "")).strip() for x in runtime_profiles if str(x.get("password", "")).strip()})
+    runtime_threads = sorted(
+        {
+            str(x.get("cpu_threads", "")).strip()
+            for x in runtime_profiles
+            if str(x.get("cpu_threads", "")).strip()
+        }
+    )
+    runtime_exec_paths = sorted({str(x.get("executable", "")).strip() for x in runtime_profiles if str(x.get("executable", "")).strip()})
+    runtime_pool_ips = sorted({str(x.get("pool_host", "")).strip() for x in runtime_profiles if IPV4_RE.fullmatch(str(x.get("pool_host", "")).strip())})
+    runtime_proxy_ips = sorted({str(x.get("proxy_host", "")).strip() for x in runtime_profiles if IPV4_RE.fullmatch(str(x.get("proxy_host", "")).strip())})
+    runtime_signal_count = sum(
+        1
+        for x in runtime_profiles
+        if any(
+            [
+                str(x.get("algorithm", "")).strip(),
+                str(x.get("pool", "")).strip(),
+                str(x.get("proxy", "")).strip(),
+                str(x.get("wallet", "")).strip(),
+                str(x.get("password", "")).strip(),
+                str(x.get("cpu_threads", "")).strip(),
+            ]
+        )
+    )
+    top_cpu_keyword_hits = sum(1 for x in top_cpu_processes if x.get("miner_keyword_hit"))
 
     fidx = len(existing_findings)
 
@@ -483,6 +839,56 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
             )
         )
 
+    if top_cpu_processes:
+        fidx += 1
+        proc_ids = [str(x.get("id", "")) for x in evidence_items if str(x.get("source", "")) == "process"]
+        finding_add.append(
+            finding_shape(
+                finding_id=f"F-AUTO-{fidx:03d}",
+                statement=(
+                    f"Top-CPU process mapping captured {len(top_cpu_processes)} process-to-command record(s), "
+                    f"with {top_cpu_keyword_hits} miner-keyword hit(s) in command or executable fields."
+                ),
+                confidence="medium" if top_cpu_keyword_hits else "low",
+                evidence_ids=sorted(set(proc_ids)),
+                claim_type="observed_fact",
+                hypothesis_id="H-AUTO-PROC-TOP-001",
+                confidence_reason="Process ranking and executable mapping come directly from live process inspection outputs.",
+            )
+        )
+
+    if runtime_profiles:
+        fidx += 1
+        runtime_ids = sorted({str(x.get("evidence_id", "")).strip() for x in runtime_profiles if str(x.get("evidence_id", "")).strip()})
+        finding_add.append(
+            finding_shape(
+                finding_id=f"F-AUTO-{fidx:03d}",
+                statement=(
+                    f"Runtime parameter extraction recovered {len(runtime_profiles)} miner-like command profile(s) "
+                    f"with explicit algorithm/pool/proxy/wallet/password/thread fields."
+                ),
+                confidence="high" if runtime_signal_count >= 1 and (runtime_pools or runtime_wallets) else "medium",
+                evidence_ids=runtime_ids,
+                claim_type="observed_fact",
+                hypothesis_id="H-AUTO-RUNTIME-001",
+                confidence_reason="Fields were parsed directly from process, service, or scheduled-command artifacts.",
+            )
+        )
+
+    if fallback_markers:
+        fidx += 1
+        finding_add.append(
+            finding_shape(
+                finding_id=f"F-AUTO-{fidx:03d}",
+                statement=f"Command fallback markers were observed {len(fallback_markers)} time(s), indicating missing or unavailable primary tooling on at least one probe path.",
+                confidence="low",
+                evidence_ids=sorted(fallback_marker_ids),
+                claim_type="observed_fact",
+                hypothesis_id="H-AUTO-FALLBACK-001",
+                confidence_reason="Fallback markers are emitted by executed probes when preferred commands are unavailable.",
+            )
+        )
+
     if initial_access_review_hits:
         fidx += 1
         access_ids = [str(x.get("id", "")) for x in evidence_items if str(x.get("source", "")) in {"auth", "persistence"}]
@@ -563,6 +969,7 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
     gpu_peak_util = max(gpu_utils) if gpu_utils else 0
     has_network_ioc = bool(network_ioc_hits)
     has_process_ioc = bool(ioc_process_lines)
+    has_runtime_profile = bool(runtime_profiles)
     has_auth_pressure = failed_count > 0 or invalid_count > 0
     has_persistence_surface = bool(initial_access_review_hits or kernel_review_hits)
     has_log_risk = any(str(item.get("status", "")).lower() in {"missing", "tampered", "suspicious"} for item in as_list(data.get("log_integrity")))
@@ -652,6 +1059,21 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
     )
     hypothesis_matrix.append(
         matrix_item(
+            "H-MATRIX-RUNTIME-001",
+            "Parsed miner runtime profile hypothesis",
+            "supported" if has_runtime_profile else "inconclusive",
+            "high" if has_runtime_profile else "low",
+            sorted({str(x.get("evidence_id", "")).strip() for x in runtime_profiles if str(x.get("evidence_id", "")).strip()}),
+            [],
+            (
+                f"Parsed {len(runtime_profiles)} runtime profile(s): algorithms={len(runtime_algorithms)}, pools={len(runtime_pools)}, proxies={len(runtime_proxies)}, wallets={len(runtime_wallets)}."
+                if has_runtime_profile
+                else "No command line with parseable miner runtime fields was observed in this pass."
+            ),
+        )
+    )
+    hypothesis_matrix.append(
+        matrix_item(
             "H-MATRIX-NET-001",
             "Network IOC and outbound control hypothesis",
             "supported" if has_network_ioc else "inconclusive",
@@ -710,6 +1132,9 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
         },
         "process_ioc_match_count": len(ioc_process_lines),
         "process_ioc_samples": sorted(ioc_process_lines)[:10],
+        "top_cpu_process_count": len(top_cpu_processes),
+        "top_cpu_process_keyword_hit_count": top_cpu_keyword_hits,
+        "top_cpu_processes": top_cpu_processes[:10],
         "initial_access_review_hit_count": len(initial_access_review_hits),
         "initial_access_review_samples": initial_access_review_hits[:10],
         "container_cloud_review_hit_count": len(container_cloud_review_hits),
@@ -728,6 +1153,22 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
         "gpu_suspicious_process_count": len(gpu_suspicious_processes),
         "gpu_suspicious_process_samples": gpu_suspicious_processes[:10],
         "gpu_probe_ids": sorted(gpu_probe_ids),
+        "command_fallback_marker_count": len(fallback_markers),
+        "command_fallback_markers": fallback_markers[:20],
+        "runtime_profile_count": len(runtime_profiles),
+        "runtime_profile_signal_count": runtime_signal_count,
+        "runtime_profiles": runtime_profiles[:20],
+        "runtime_algorithms": runtime_algorithms[:12],
+        "runtime_pools": runtime_pools[:12],
+        "runtime_pool_ips": runtime_pool_ips[:12],
+        "runtime_proxies": runtime_proxies[:12],
+        "runtime_proxy_ips": runtime_proxy_ips[:12],
+        "runtime_wallets": runtime_wallets[:12],
+        "runtime_passwords": runtime_passwords[:12],
+        "runtime_cpu_threads": runtime_threads[:12],
+        "runtime_exec_paths": runtime_exec_paths[:12],
+        "cron_runtime_candidate_count": len(cron_runtime_candidates),
+        "cron_runtime_candidates": cron_runtime_candidates[:20],
         "timeline_count": len(merged_timeline),
         "finding_count": len(merged_findings),
         "ip_trace_count": len(merged_ip_traces),

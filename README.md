@@ -42,6 +42,14 @@
 4. **Confidence-Gated Conclusion**：按证据完整度输出 `confirmed` 或 `inconclusive`，禁止杜撰。
 5. **Approval-Gated Response**：仅输出处置建议，变更操作必须显式审批。
 
+## 关键自动解析能力
+
+- 自动提取高 CPU 进程并映射到对应可执行程序（PID -> exe -> cmdline）。
+- 自动解析矿工类命令参数：`algorithm`、`pool`、`proxy`、`wallet`、`password`、`cpu-threads`。
+- 自动提取 systemd `ExecStart`、cron/crontab 调度中的可疑运行命令画像。
+- 自动识别命令不可用/降级标记，并在报告中显式给出可见性边界。
+- 报告前部优先展示“运行参数画像”与高信号结论，减少人工翻全文成本。
+
 ## 输出结果
 
 默认在当前工作目录生成案件包：
