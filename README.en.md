@@ -36,7 +36,7 @@ Key capabilities:
 
 - Remote and local investigation workflows.
 - Multiple access modes: local shell, SSH private key, agent-loaded key, password auth, jump host, console access.
-- SSH trust bootstrap with known-hosts or pinned fingerprint verification.
+- SSH trust bootstrap with known-hosts or pinned fingerprint verification, plus optional controlled `--trust-on-first-use` for first-seen internal triage.
 - Read-only evidence collection with timeout control and checkpoint recording.
 - Distro-aware triage for Ubuntu, Debian, Arch, and similar Linux systems.
 - Command-trust checks for missing commands, aliases, wrapped binaries, suspicious path drift, and partially trusted tooling.
@@ -46,6 +46,8 @@ Key capabilities:
 - False-positive control for legitimate high-compute workloads.
 - Timeline normalization with host/report timezone separation.
 - Confidence-gated conclusions: observed fact, inference, attribution.
+- Hypothesis matrix output that binds each hypothesis to support evidence, counter evidence, and decision status.
+- GPU-aware triage correlation beyond device listing: utilization/power/process views and PID linkage to suspicious runtime lines.
 - Case-bundle export with artifacts, evidence, metadata, and layered reports.
 - Same-host baseline generation and application.
 - Cross-case comparison for repeat incidents on the same host.
@@ -84,6 +86,9 @@ reports/
         |-- index.zh-CN.md
         |-- management-summary.md
         |-- management-summary.zh-CN.md
+        |-- operator-brief.md
+        |-- operator-brief.zh-CN.md
+        |-- operator-brief.json
         |-- soc-summary.md
         `-- soc-summary.zh-CN.md
 ```
@@ -299,6 +304,54 @@ python scripts/run_readonly_workflow.py \
   --strict-report
 ```
 
+### Remote quick-connect with IP + username + password
+
+For operator-driven internal triage where host ownership is already confirmed and you need to start read-only collection immediately:
+
+```bash
+export SSH_PASSWORD='<PASSWORD>'
+python scripts/run_readonly_workflow.py \
+  --remote-user <REMOTE_USER> \
+  --remote-ip <HOST_IP> \
+  --port <SSH_PORT> \
+  --password-env SSH_PASSWORD \
+  --trust-on-first-use \
+  --analyst <ANALYST> \
+  --host-ip <HOST_IP> \
+  --os-hint "<OS_HINT>" \
+  --mining-mode auto \
+  --profile enterprise-self-audit \
+  --strict-report
+```
+
+Notes:
+
+- `--trust-on-first-use` is for first-seen, time-critical internal triage only. Prefer pinned fingerprint or existing known-host trust for high-risk targets.
+- After first connection, move the host key into your normal strong trust-bootstrap flow.
+
+### Natural-language one-line control
+
+If you do not want to compose flags manually, you can pass a plain-language request:
+
+```bash
+python scripts/nl_control.py \
+  --request "Investigate <HOST_IP>, username <REMOTE_USER>, password <PASSWORD>, port <SSH_PORT>, focus on gpu mining" \
+  --analyst <ANALYST>
+```
+
+The controller auto-parses:
+
+- target IP, account, password, port
+- CPU/GPU/MIXED investigation mode
+- trust bootstrap flags (defaults to `--trust-on-first-use` when no fingerprint is provided)
+- workflow defaults (read-only and strict reporting)
+
+It also exports a novice-friendly operator brief:
+
+- `reports/<case>/reports/operator-brief.zh-CN.md`
+- `reports/<case>/reports/operator-brief.md`
+- `reports/<case>/reports/operator-brief.json`
+
 ## Recommended Usage Sequence
 
 If you want the most useful investigation output, use the skill in this order:
@@ -334,7 +387,9 @@ The full report distinguishes:
 - observed fact
 - inference
 - attribution
+- hypothesis-to-evidence matrix (supporting and counter evidence)
 - confidence and confidence reason
+- GPU adapter/utilization/process correlation
 - normalized timeline
 - traceable vs untraceable IPs
 - log-integrity caveats
@@ -401,6 +456,20 @@ The following categories always require explicit approval first:
 python C:/Users/admin/.codex/skills/.system/skill-creator/scripts/quick_validate.py D:/skills/mining-host-troubleshooter-skill
 python scripts/audit_example_placeholders.py --strict
 ```
+
+## Sensitive Data Check Before GitHub Push
+
+Scan tracked files only, so temporary local reports do not get mixed into repository checks (PowerShell example):
+
+```powershell
+rg -n -S -e "-----BEGIN [A-Z ]*PRIVATE KEY-----" -e "ssh-ed25519\\s+[A-Za-z0-9+/=]{20,}" -e "AKIA[0-9A-Z]{16}" (git ls-files)
+rg -n -S -e "(?i)(password|passwd|token|secret|api[_-]?key)\\s*[:=]\\s*[^<\\s][^\\s]*" (git ls-files)
+```
+
+Before pushing, also run:
+
+- `git status --short` to ensure reports/logs/temp files are not staged.
+- `git diff --cached` to manually verify there are no sensitive values.
 
 ## Repository Notes
 

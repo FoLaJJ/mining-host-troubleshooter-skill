@@ -24,6 +24,13 @@ AUTH_CLOSE_RE = re.compile(
     r"(?:^|[\s:])Connection closed by authenticating user (?P<user>\S+) (?P<ip>\d{1,3}(?:\.\d{1,3}){3})\b"
 )
 LISTEN_PORT_RE = re.compile(r"\b(?:LISTEN|UNCONN)\b.*?(\d{1,3}(?:\.\d{1,3}){3}|::|0\.0\.0\.0|\*)[:.](\d{1,5})\b")
+GPU_QUERY_LINE_RE = re.compile(
+    r"^\s*(?P<index>\d+)\s*,\s*(?P<name>[^,]+)\s*,\s*(?P<util>[^,]+)\s*,\s*(?P<temp>[^,]+)\s*,\s*(?P<power>[^,]+)\s*,\s*(?P<limit>[^,]+)\s*,\s*(?P<mem_used>[^,]+)\s*,\s*(?P<mem_total>[^,]+)\s*$"
+)
+GPU_COMPUTE_APP_RE = re.compile(
+    r"^\s*(?P<pid>\d+)\s*,\s*(?P<process>[^,]+)\s*,\s*(?P<gpu_uuid>[^,]+)\s*,\s*(?P<mem>[^,]+)\s*$"
+)
+MINER_KEYWORD_RE = re.compile(r"(miner|xmrig|gminer|lolminer|trex|nbminer|stratum|kawpow)", re.I)
 
 
 def now_utc() -> str:
@@ -81,6 +88,16 @@ def normalize_time_utc(value: str) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def parse_int_from_text(value: str) -> int | None:
+    m = re.search(r"(-?\d+)", value or "")
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
 
 
 def finding_shape(
@@ -181,6 +198,12 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
     container_cloud_review_hits: list[str] = []
     network_ioc_hits: list[str] = []
     kernel_review_hits: list[str] = []
+    gpu_probe_ids: set[str] = set()
+    gpu_vendor_hints: set[str] = set()
+    gpu_adapter_lines: list[str] = []
+    gpu_utilization_samples: list[dict[str, Any]] = []
+    gpu_compute_processes: list[dict[str, str]] = []
+    gpu_suspicious_processes: list[dict[str, str]] = []
     host_reported_timezone = "unknown"
     host_ntp_synchronized = "unknown"
     privilege_user = "unknown"
@@ -283,6 +306,51 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
                     if ln.strip():
                         ioc_process_lines.append(ln.strip())
 
+        if source == "gpu":
+            gpu_probe_ids.add(evid_id)
+            if stdout.strip():
+                for line in stdout.splitlines():
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    if len(gpu_adapter_lines) < 24 and (
+                        stripped.lower().startswith("gpu ")
+                        or "nvidia" in stripped.lower()
+                        or "amd" in stripped.lower()
+                        or "radeon" in stripped.lower()
+                    ):
+                        gpu_adapter_lines.append(stripped)
+                    lower = stripped.lower()
+                    if "nvidia" in lower:
+                        gpu_vendor_hints.add("nvidia")
+                    if "amd" in lower or "radeon" in lower:
+                        gpu_vendor_hints.add("amd")
+
+                    mq = GPU_QUERY_LINE_RE.match(stripped)
+                    if mq:
+                        util = parse_int_from_text(mq.group("util"))
+                        entry = {
+                            "index": mq.group("index").strip(),
+                            "name": mq.group("name").strip(),
+                            "utilization": str(util if util is not None else "unknown"),
+                            "memory_used": mq.group("mem_used").strip(),
+                            "memory_total": mq.group("mem_total").strip(),
+                        }
+                        if len(gpu_utilization_samples) < 16:
+                            gpu_utilization_samples.append(entry)
+                        continue
+
+                    mc = GPU_COMPUTE_APP_RE.match(stripped)
+                    if mc:
+                        proc_entry = {
+                            "pid": mc.group("pid").strip(),
+                            "process": mc.group("process").strip(),
+                            "gpu_uuid": mc.group("gpu_uuid").strip(),
+                            "memory": mc.group("mem").strip(),
+                        }
+                        if len(gpu_compute_processes) < 32:
+                            gpu_compute_processes.append(proc_entry)
+
         if source == "system" and "timedatectl show" in command:
             for line in stdout.splitlines():
                 if line.startswith("Timezone="):
@@ -319,6 +387,14 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
             for line in stdout.splitlines():
                 if line.strip() and len(kernel_review_hits) < 20:
                     kernel_review_hits.append(line.strip())
+
+    ioc_blob = "\n".join(ioc_process_lines).lower()
+    for item in gpu_compute_processes:
+        pname = str(item.get("process", "")).strip()
+        pid = str(item.get("pid", "")).strip()
+        pid_correlated = bool(pid and re.search(rf"(^|\\D){re.escape(pid)}(\\D|$)", ioc_blob))
+        if MINER_KEYWORD_RE.search(pname) or pid_correlated:
+            gpu_suspicious_processes.append(item)
 
     fidx = len(existing_findings)
 
@@ -368,6 +444,27 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
                 claim_type="observed_fact",
                 hypothesis_id="H-AUTO-NET-001",
                 confidence_reason="The listening-port list comes directly from socket inspection output.",
+            )
+        )
+
+    if gpu_probe_ids and (gpu_adapter_lines or gpu_utilization_samples or gpu_compute_processes):
+        fidx += 1
+        finding_add.append(
+            finding_shape(
+                finding_id=f"F-AUTO-{fidx:03d}",
+                statement=(
+                    f"GPU evidence reports {len(gpu_adapter_lines) or len(gpu_utilization_samples)} adapter/utilization line(s), "
+                    f"{len(gpu_compute_processes)} active compute process record(s), and {len(gpu_suspicious_processes)} suspicious GPU process correlation(s)."
+                ),
+                confidence="medium" if gpu_suspicious_processes else "low",
+                evidence_ids=sorted(gpu_probe_ids),
+                claim_type="observed_fact" if gpu_suspicious_processes else "inference",
+                hypothesis_id="H-AUTO-GPU-001",
+                confidence_reason=(
+                    "GPU process lines include miner-like keyword or PID correlation with process IOC output."
+                    if gpu_suspicious_processes
+                    else "GPU runtime visibility is present, but no direct miner-linked GPU process is confirmed yet."
+                ),
             )
         )
 
@@ -462,6 +559,121 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
+    gpu_utils = [safe for safe in [parse_int_from_text(str(x.get("utilization", ""))) for x in gpu_utilization_samples] if safe is not None]
+    gpu_peak_util = max(gpu_utils) if gpu_utils else 0
+    has_network_ioc = bool(network_ioc_hits)
+    has_process_ioc = bool(ioc_process_lines)
+    has_auth_pressure = failed_count > 0 or invalid_count > 0
+    has_persistence_surface = bool(initial_access_review_hits or kernel_review_hits)
+    has_log_risk = any(str(item.get("status", "")).lower() in {"missing", "tampered", "suspicious"} for item in as_list(data.get("log_integrity")))
+
+    def matrix_item(
+        hypothesis_id: str,
+        title: str,
+        status: str,
+        confidence: str,
+        support_ids: list[str],
+        counter_ids: list[str],
+        summary: str,
+    ) -> dict[str, Any]:
+        return {
+            "hypothesis_id": hypothesis_id,
+            "title": title,
+            "status": status,
+            "confidence": confidence,
+            "supporting_evidence_ids": sorted({x for x in support_ids if x}),
+            "counter_evidence_ids": sorted({x for x in counter_ids if x}),
+            "summary": summary,
+        }
+
+    src_ids = {}
+    for item in evidence_items:
+        src = str(item.get("source", "")).strip()
+        evid = str(item.get("id", "")).strip()
+        if src and evid:
+            src_ids.setdefault(src, []).append(evid)
+
+    hypothesis_matrix: list[dict[str, Any]] = []
+    hypothesis_matrix.append(
+        matrix_item(
+            "H-MATRIX-CPU-001",
+            "CPU runtime miner hypothesis",
+            "supported" if has_process_ioc else "inconclusive",
+            "medium" if has_process_ioc else "low",
+            src_ids.get("process", []),
+            [],
+            "Process IOC keyword matches exist." if has_process_ioc else "No direct miner-like process keyword match was observed in this pass.",
+        )
+    )
+    if gpu_probe_ids:
+        gpu_status = "supported" if gpu_suspicious_processes else ("inconclusive" if gpu_compute_processes or gpu_peak_util > 0 else "not_observed")
+        hypothesis_matrix.append(
+            matrix_item(
+                "H-MATRIX-GPU-001",
+                "GPU runtime miner hypothesis",
+                gpu_status,
+                "medium" if gpu_suspicious_processes else "low",
+                sorted(gpu_probe_ids),
+                src_ids.get("process", []) if not gpu_suspicious_processes else [],
+                (
+                    f"GPU suspicious process correlations={len(gpu_suspicious_processes)}, peak utilization={gpu_peak_util}%."
+                    if gpu_suspicious_processes
+                    else f"GPU activity observed (peak utilization={gpu_peak_util}%), but no direct miner-linked GPU process was confirmed."
+                ),
+            )
+        )
+    hypothesis_matrix.append(
+        matrix_item(
+            "H-MATRIX-ACCESS-001",
+            "Credential or initial-access abuse hypothesis",
+            "supported" if has_auth_pressure else ("inconclusive" if initial_access_review_hits else "not_observed"),
+            "medium" if has_auth_pressure else "low",
+            src_ids.get("auth", []) + src_ids.get("persistence", []),
+            [],
+            (
+                f"Authentication pressure observed (failed={failed_count}, invalid={invalid_count})."
+                if has_auth_pressure
+                else "Only review-surface signals are present; direct credential abuse evidence is limited."
+            ),
+        )
+    )
+    hypothesis_matrix.append(
+        matrix_item(
+            "H-MATRIX-PERSIST-001",
+            "Persistence foothold hypothesis",
+            "supported" if has_persistence_surface else "inconclusive",
+            "low",
+            src_ids.get("persistence", []) + src_ids.get("service", []),
+            [],
+            "Persistence review surfaces contain suspicious lines and require analyst confirmation."
+            if has_persistence_surface
+            else "No persistence surface hit was observed in this pass.",
+        )
+    )
+    hypothesis_matrix.append(
+        matrix_item(
+            "H-MATRIX-NET-001",
+            "Network IOC and outbound control hypothesis",
+            "supported" if has_network_ioc else "inconclusive",
+            "low",
+            src_ids.get("network_ioc", []) + src_ids.get("network", []),
+            [],
+            "Pool/wallet/deployment keyword matches are present in network IOC review." if has_network_ioc else "No direct pool/wallet keyword hit in this pass.",
+        )
+    )
+    if has_log_risk:
+        hypothesis_matrix.append(
+            matrix_item(
+                "H-MATRIX-LOG-001",
+                "Log tampering hypothesis",
+                "supported",
+                "medium",
+                src_ids.get("log_integrity", []),
+                [],
+                "Primary log artifacts show missing/tampered/suspicious state.",
+            )
+        )
+
     merged_findings = dedupe_findings(existing_findings + finding_add)
     merged_timeline = dedupe_timeline(existing_timeline + timeline_add)
     merged_ip_traces = merge_ip_traces(existing_ip_traces, ip_trace_add)
@@ -506,9 +718,20 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
         "network_ioc_samples": network_ioc_hits[:10],
         "kernel_review_hit_count": len(kernel_review_hits),
         "kernel_review_samples": kernel_review_hits[:10],
+        "gpu_vendor_hints": sorted(gpu_vendor_hints),
+        "gpu_adapter_line_count": len(gpu_adapter_lines),
+        "gpu_adapter_samples": gpu_adapter_lines[:10],
+        "gpu_utilization_samples": gpu_utilization_samples[:10],
+        "gpu_peak_utilization_percent": gpu_peak_util,
+        "gpu_compute_process_count": len(gpu_compute_processes),
+        "gpu_compute_process_samples": gpu_compute_processes[:10],
+        "gpu_suspicious_process_count": len(gpu_suspicious_processes),
+        "gpu_suspicious_process_samples": gpu_suspicious_processes[:10],
+        "gpu_probe_ids": sorted(gpu_probe_ids),
         "timeline_count": len(merged_timeline),
         "finding_count": len(merged_findings),
         "ip_trace_count": len(merged_ip_traces),
+        "hypothesis_matrix_count": len(hypothesis_matrix),
     }
 
     note = (
@@ -521,6 +744,7 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
     data["findings"] = merged_findings
     data["timeline"] = merged_timeline
     data["ip_traces"] = merged_ip_traces
+    data["hypothesis_matrix"] = hypothesis_matrix
     data["unknowns"] = unknowns
     data["scene_reconstruction"] = scene_reconstruction
     data["enrichment"] = {

@@ -77,6 +77,8 @@ def build_collect_cmd(args: argparse.Namespace, collect_script: Path) -> list[st
     add_arg(cmd, "--jump", args.jump)
     add_arg(cmd, "--known-hosts", args.known_hosts)
     add_arg(cmd, "--host-key-fingerprint", args.host_key_fingerprint)
+    if args.trust_on_first_use:
+        cmd.append("--trust-on-first-use")
     add_arg(cmd, "--password", args.password)
     add_arg(cmd, "--password-env", args.password_env)
     if args.prompt_password:
@@ -400,11 +402,14 @@ def main() -> int:
     parser.add_argument("--mining-mode", choices=["auto", "gpu", "cpu", "mixed"], default="auto")
     parser.add_argument("--expected-workload", help="Declared legitimate high-compute workload for false-positive control.")
     parser.add_argument("--remote", help="Remote target in user@host format.")
+    parser.add_argument("--remote-user", help="Remote SSH username (shortcut with --remote-ip).")
+    parser.add_argument("--remote-ip", help="Remote host or IP (shortcut with --remote-user).")
     parser.add_argument("--port", type=int, help="SSH port.")
     parser.add_argument("--identity", help="SSH private key path.")
     parser.add_argument("--jump", help="SSH jump host user@host.")
     parser.add_argument("--known-hosts", help="Known-hosts file containing the pinned server key.")
     parser.add_argument("--host-key-fingerprint", help="Pinned remote host key fingerprint in SHA256:<base64> form.")
+    parser.add_argument("--trust-on-first-use", action="store_true", help="Accept host key on first seen and pin it into case metadata when no trust source exists.")
     parser.add_argument("--password", help="Deprecated insecure SSH password input. Disabled unless --allow-insecure-cli-password is set.")
     parser.add_argument("--password-env", help="Read SSH password from env var name.")
     parser.add_argument("--prompt-password", action="store_true", help="Prompt securely for the SSH password instead of using command-line plaintext.")
@@ -434,6 +439,16 @@ def main() -> int:
         raise SystemExit("Plaintext --password is disabled by default. Use --password-env or --prompt-password instead.")
     if sum(bool(x) for x in [args.password, args.password_env, args.prompt_password]) > 1:
         raise SystemExit("Use only one of --password, --password-env, or --prompt-password.")
+    if not args.remote and (args.remote_user or args.remote_ip):
+        if not args.remote_user or not args.remote_ip:
+            raise SystemExit("Use --remote-user and --remote-ip together, or provide --remote directly.")
+        args.remote = f"{args.remote_user}@{args.remote_ip}"
+        if not args.host_ip:
+            args.host_ip = args.remote_ip
+    if args.remote and not (args.host_key_fingerprint or args.known_hosts or args.trust_on_first_use):
+        if args.remote_user and args.remote_ip:
+            args.trust_on_first_use = True
+            print("[WARN] no host-key source provided; enabling --trust-on-first-use for shortcut remote mode.")
 
     script_dir = Path(__file__).resolve().parent
     preflight_script = script_dir / "preflight_environment.py"
@@ -445,6 +460,7 @@ def main() -> int:
     baseline_script = script_dir / "apply_host_baseline.py"
     export_script = script_dir / "export_investigation_report.py"
     external_evidence_script = script_dir / "export_external_evidence_checklist.py"
+    operator_brief_script = script_dir / "generate_operator_brief.py"
 
     if not args.case_dir and not args.case_tag:
         args.case_tag = default_case_tag(args)
@@ -548,6 +564,20 @@ def main() -> int:
         write_checkpoint(case_dir, "baseline_assessment_complete", extra={"baseline_path": args.baseline})
 
     if not args.skip_export:
+        brief_cmd = [
+            sys.executable,
+            str(operator_brief_script),
+            "--input",
+            evidence_for_next,
+            "--case-dir",
+            case_dir,
+        ]
+        code, _ = run_step("generate_operator_brief", brief_cmd)
+        if code != 0:
+            print("[ERROR] generate_operator_brief failed", file=sys.stderr)
+            return code
+        write_checkpoint(case_dir, "operator_brief_complete", extra={"brief_path": str(Path(case_dir) / "reports" / "operator-brief.zh-CN.md")})
+
         export_cmd = [
             sys.executable,
             str(export_script),
@@ -610,6 +640,8 @@ def main() -> int:
         print(f"[DONE] Management Summary: {Path(case_dir) / 'reports' / 'management-summary.md'}")
         print(f"[DONE] SOC Summary: {Path(case_dir) / 'reports' / 'soc-summary.md'}")
         print(f"[DONE] External Evidence Checklist: {Path(case_dir) / 'reports' / 'external-evidence-checklist.md'}")
+        print(f"[DONE] Operator Brief (ZH): {Path(case_dir) / 'reports' / 'operator-brief.zh-CN.md'}")
+        print(f"[DONE] Operator Brief (EN): {Path(case_dir) / 'reports' / 'operator-brief.md'}")
     return 0
 
 

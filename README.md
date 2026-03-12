@@ -59,7 +59,7 @@
 
 - 支持本机与远程主机排查。
 - 支持多种接入方式：本地 shell、SSH 私钥、SSH agent、账密、跳板机、控制台。
-- 远程接入时支持 `known_hosts` 或主机指纹 pinning 的信任引导。
+- 远程接入时支持 `known_hosts` 或主机指纹 pinning 的信任引导；首次接入可选 `--trust-on-first-use` 受控落盘（会在报告里标记为较弱信任起点）。
 - 默认只读采集，带超时控制、检查点和证据链校验。
 - 兼容 Ubuntu、Debian、Arch 等 Linux 发行版差异。
 - 能处理命令缺失、alias 包装、路径漂移、可疑二进制、部分命令不可信等情况，并优先寻找只读替代链。
@@ -68,6 +68,8 @@
 - 当认证日志、系统日志或 journal 被删除时，会继续从 `wtmp`、`btmp`、`lastlog`、service/timer 元数据、journald/rsyslog 配置、包管理历史、shell 痕迹文件、`/proc/*/exe (deleted)` 等残留证据补线索。
 - 对合法高算力任务有误报控制，不会因为 CPU / GPU 高占用就直接下入侵结论。
 - 支持时间标准化、结论置信度分级、观测事实 / 推断 / 归因分层。
+- 自动生成“假设-证据关联矩阵”，把假设、支撑证据、反证证据、状态关联到同一张表。
+- GPU 排查支持适配器识别、利用率/功耗、GPU 计算进程与 PID 关联，不再只看 `nvidia-smi -L`。
 - 自动产出案件包、分层报告、同机基线和跨案件差异比对结果。
 
 ## 调查顺序
@@ -189,6 +191,9 @@ reports/
         |-- index.zh-CN.md
         |-- management-summary.md
         |-- management-summary.zh-CN.md
+        |-- operator-brief.md
+        |-- operator-brief.zh-CN.md
+        |-- operator-brief.json
         |-- soc-summary.md
         `-- soc-summary.zh-CN.md
 ```
@@ -330,6 +335,54 @@ python scripts/run_readonly_workflow.py \
 
 如果是第一次在你自己的环境使用，建议先在低风险测试机或影子环境跑一遍，再上业务主机。
 
+### 4. 远程快速直连（给出 IP + 账号 + 密码）
+
+适用于你已经确认目标主机归属，且需要快速发起只读排查的场景。推荐用环境变量传密码，不把明文写进命令行。
+
+```bash
+export SSH_PASSWORD='<PASSWORD>'
+python scripts/run_readonly_workflow.py \
+  --remote-user <REMOTE_USER> \
+  --remote-ip <HOST_IP> \
+  --port <SSH_PORT> \
+  --password-env SSH_PASSWORD \
+  --trust-on-first-use \
+  --analyst <ANALYST> \
+  --host-ip <HOST_IP> \
+  --os-hint "<OS_HINT>" \
+  --mining-mode auto \
+  --profile enterprise-self-audit \
+  --strict-report
+```
+
+说明：
+
+- `--trust-on-first-use` 只建议用于首次、内部、紧急排查；高风险环境仍应优先用指纹或现有 `known_hosts`。
+- 一旦首次连接完成，建议立即把指纹固化到你自己的信任链流程里，后续按强校验走。
+
+### 5. 自然语言一条指令控制（面向小白）
+
+如果你不想自己拼接参数，可以直接把需求写成一句话，交给自然语言控制入口：
+
+```bash
+python scripts/nl_control.py \
+  --request "排查 <HOST_IP>，用户名 <REMOTE_USER>，密码 <PASSWORD>，端口 <SSH_PORT>，重点看 gpu 挖矿" \
+  --analyst <ANALYST>
+```
+
+这个入口会自动解析：
+
+- 目标主机 IP、账号、密码、端口
+- CPU/GPU/MIXED 排查模式
+- 信任引导参数（缺少指纹时默认走 `--trust-on-first-use`）
+- 工作流执行参数（默认只读、严格报告）
+
+执行后会自动产出给非安全人员看的简报：
+
+- `reports/<case>/reports/operator-brief.zh-CN.md`
+- `reports/<case>/reports/operator-brief.md`
+- `reports/<case>/reports/operator-brief.json`
+
 ## 推荐使用顺序
 
 如果想把这套流程用完整，建议按下面顺序使用：
@@ -365,7 +418,9 @@ python scripts/run_readonly_workflow.py \
 - 观测事实
 - 推断
 - 归因
+- 假设-证据关联矩阵（支撑证据 / 反证证据 / 状态）
 - 置信度与置信度原因
+- GPU 适配器、利用率、计算进程与可疑关联
 - 标准化时间线
 - 已溯源与未溯源 IP
 - 日志完整性风险
@@ -436,6 +491,20 @@ python scripts/compare_case_bundles.py \
 python C:/Users/admin/.codex/skills/.system/skill-creator/scripts/quick_validate.py D:/skills/mining-host-troubleshooter-skill
 python scripts/audit_example_placeholders.py --strict
 ```
+
+## 上传 GitHub 前的敏感信息检查
+
+只扫描已跟踪文件，避免把工作目录中的临时报告误判为仓库内容（PowerShell 示例）：
+
+```powershell
+rg -n -S -e "-----BEGIN [A-Z ]*PRIVATE KEY-----" -e "ssh-ed25519\\s+[A-Za-z0-9+/=]{20,}" -e "AKIA[0-9A-Z]{16}" (git ls-files)
+rg -n -S -e "(?i)(password|passwd|token|secret|api[_-]?key)\\s*[:=]\\s*[^<\\s][^\\s]*" (git ls-files)
+```
+
+建议在推送前再做一次：
+
+- `git status --short`：确认没有把 `reports/`、调试日志或临时文件加入暂存区。
+- `git diff --cached`：人工复核即将提交的内容是否包含敏感字段。
 
 ## 仓库说明
 

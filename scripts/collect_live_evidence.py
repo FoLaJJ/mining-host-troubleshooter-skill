@@ -16,6 +16,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -290,8 +291,22 @@ BASE_PROBES = [
         "done",
     ),
     Probe("gpu", "nvidia-smi -L 2>/dev/null || true"),
-    Probe("gpu", "nvidia-smi --query-gpu=index,name,utilization.gpu,temperature.gpu,power.draw,power.limit --format=csv,noheader 2>/dev/null || true"),
-    Probe("gpu", "rocm-smi --showproductname --showuse --showtemp --showpower 2>/dev/null || true"),
+    Probe(
+        "gpu",
+        "nvidia-smi --query-gpu=index,name,utilization.gpu,temperature.gpu,power.draw,power.limit,memory.used,memory.total "
+        "--format=csv,noheader 2>/dev/null || true",
+    ),
+    Probe(
+        "gpu",
+        "nvidia-smi --query-compute-apps=pid,process_name,gpu_uuid,used_gpu_memory --format=csv,noheader 2>/dev/null || true",
+    ),
+    Probe("gpu", "nvidia-smi pmon -c 1 2>/dev/null || true"),
+    Probe(
+        "gpu",
+        "if command -v lspci >/dev/null 2>&1; then lspci -nnk | grep -Ei 'VGA|3D|Display|NVIDIA|AMD/ATI' -A3; "
+        "else echo 'lspci_missing'; fi",
+    ),
+    Probe("gpu", "rocm-smi --showproductname --showuse --showtemp --showpower --showpidgpus 2>/dev/null || true"),
     Probe(
         "log_integrity",
         "for f in /var/log/auth.log /var/log/auth.log.1 /var/log/secure /var/log/syslog /var/log/messages /var/log/wtmp /var/log/btmp /var/log/lastlog; do "
@@ -626,6 +641,90 @@ def fetch_remote_server_key(host: str, port: int, timeout: int) -> Any:
         sock.close()
 
 
+def parse_sha256_fingerprint(text: str) -> str:
+    m = re.search(r"(SHA256:[A-Za-z0-9+/=]+)", text or "")
+    return m.group(1) if m else ""
+
+
+def fingerprint_from_known_hosts_line(line: str) -> str:
+    if not line.strip():
+        return ""
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as fh:
+        fh.write(line.strip() + "\n")
+        path = fh.name
+    try:
+        proc = subprocess.run(
+            ["ssh-keygen", "-lf", path, "-E", "sha256"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return ""
+        return parse_sha256_fingerprint(proc.stdout)
+    finally:
+        try:
+            Path(path).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def fetch_remote_server_key_line(host: str, port: int, timeout: int) -> str:
+    proc = subprocess.run(
+        ["ssh-keyscan", "-T", str(timeout), "-p", str(port), host],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=timeout + 2,
+    )
+    if proc.returncode != 0 and not proc.stdout.strip():
+        return ""
+    for raw in proc.stdout.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) >= 3:
+            return line
+    return ""
+
+
+def lookup_known_host_entry_fallback(host: str, port: int, known_hosts_files: list[str]) -> dict[str, str]:
+    tokens = known_host_tokens(host, port)
+    for known_hosts_path in known_hosts_files:
+        for token in tokens:
+            proc = subprocess.run(
+                ["ssh-keygen", "-F", token, "-f", known_hosts_path],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if proc.returncode != 0 or not proc.stdout.strip():
+                continue
+            for raw in proc.stdout.splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                fp = fingerprint_from_known_hosts_line(line)
+                if not fp:
+                    continue
+                return {
+                    "known_hosts_path": known_hosts_path,
+                    "host_token": token,
+                    "key_type": parts[1],
+                    "host_key_fingerprint": fp,
+                    "raw_line": line,
+                }
+    return {}
+
+
+def write_known_hosts_line(path: Path, line: str) -> None:
+    path.write_text(line.rstrip() + "\n", encoding="utf-8")
+
+
 def write_known_hosts_entry(path: Path, host: str, port: int, key: Any) -> None:
     token = host if port == 22 else f"[{host}]:{port}"
     line = f"{token} {key.get_name()} {key.get_base64()}\n"
@@ -649,14 +748,32 @@ def bootstrap_remote_trust(args: argparse.Namespace) -> dict[str, Any]:
 
     if args.host_key_fingerprint:
         expected = normalize_fingerprint(args.host_key_fingerprint)
-        server_key = fetch_remote_server_key(host, port, args.timeout)
-        observed = key_sha256_fingerprint(server_key)
-        if observed != expected:
-            raise SystemExit(
-                f"Remote trust bootstrap failed: host key fingerprint mismatch for {host}:{port}. expected={expected} observed={observed}"
-            )
-        pinned_path = Path(args.case_meta_dir) / "pinned_known_hosts"
-        write_known_hosts_entry(pinned_path, host, port, server_key)
+        if paramiko is not None:
+            server_key = fetch_remote_server_key(host, port, args.timeout)
+            observed = key_sha256_fingerprint(server_key)
+            if observed != expected:
+                raise SystemExit(
+                    f"Remote trust bootstrap failed: host key fingerprint mismatch for {host}:{port}. expected={expected} observed={observed}"
+                )
+            pinned_path = Path(args.case_meta_dir) / "pinned_known_hosts"
+            write_known_hosts_entry(pinned_path, host, port, server_key)
+        else:
+            line = fetch_remote_server_key_line(host, port, args.timeout)
+            if not line:
+                raise SystemExit(
+                    f"Remote trust bootstrap failed: unable to fetch remote host key for {host}:{port}."
+                )
+            observed = fingerprint_from_known_hosts_line(line)
+            if not observed:
+                raise SystemExit(
+                    f"Remote trust bootstrap failed: unable to derive fingerprint for {host}:{port}."
+                )
+            if observed != expected:
+                raise SystemExit(
+                    f"Remote trust bootstrap failed: host key fingerprint mismatch for {host}:{port}. expected={expected} observed={observed}"
+                )
+            pinned_path = Path(args.case_meta_dir) / "pinned_known_hosts"
+            write_known_hosts_line(pinned_path, line)
         args.runtime_known_hosts = str(pinned_path)
         args.trust_known_hosts_files = [str(pinned_path)]
         return {
@@ -672,6 +789,38 @@ def bootstrap_remote_trust(args: argparse.Namespace) -> dict[str, Any]:
     known_hosts_files = resolve_known_hosts_files(args)
     match = lookup_known_host_entry(host, port, known_hosts_files)
     if not match:
+        match = lookup_known_host_entry_fallback(host, port, known_hosts_files)
+    if not match:
+        if args.trust_on_first_use:
+            pinned_path = Path(args.case_meta_dir) / "pinned_known_hosts"
+            if paramiko is not None:
+                server_key = fetch_remote_server_key(host, port, args.timeout)
+                observed = key_sha256_fingerprint(server_key)
+                write_known_hosts_entry(pinned_path, host, port, server_key)
+            else:
+                line = fetch_remote_server_key_line(host, port, args.timeout)
+                if not line:
+                    raise SystemExit(
+                        f"Remote trust bootstrap failed: unable to fetch remote host key for {host}:{port}."
+                    )
+                observed = fingerprint_from_known_hosts_line(line)
+                if not observed:
+                    raise SystemExit(
+                        f"Remote trust bootstrap failed: unable to derive fingerprint for {host}:{port}."
+                    )
+                write_known_hosts_line(pinned_path, line)
+            args.runtime_known_hosts = str(pinned_path)
+            args.trust_known_hosts_files = [str(pinned_path)]
+            return {
+                "mode": "tofu",
+                "status": "verified_first_seen",
+                "verification_source": "trust_on_first_use",
+                "host": host,
+                "port": port,
+                "host_key_fingerprint": observed,
+                "known_hosts_path": str(pinned_path),
+                "warning": "Host key accepted on first seen. Re-verify out-of-band for high-risk environments.",
+            }
         raise SystemExit(
             "Remote trust bootstrap failed: no trusted host-key source found. "
             "Provide --host-key-fingerprint or --known-hosts, or pre-populate known_hosts before collection."
@@ -690,10 +839,10 @@ def bootstrap_remote_trust(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def build_ssh_prefix(args: argparse.Namespace) -> list[str]:
+def build_ssh_prefix(args: argparse.Namespace, *, batch_mode: bool = True) -> list[str]:
     prefix = [
         "ssh",
-        "-o", "BatchMode=yes",
+        "-o", f"BatchMode={'yes' if batch_mode else 'no'}",
         "-o", "StrictHostKeyChecking=yes",
         "-o", f"ConnectTimeout={args.timeout}",
         "-o", "ConnectionAttempts=1",
@@ -719,6 +868,24 @@ def run_remote(prefix: list[str], cmd: str, timeout: int) -> tuple[int, str, str
             text=True,
             check=False,
             timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return 124, (exc.stdout or ""), (exc.stderr or f"probe_timeout_after_{timeout}s")
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def run_remote_password_sshpass(prefix: list[str], cmd: str, timeout: int, password: str) -> tuple[int, str, str]:
+    wrapped = f"bash -lc {shlex.quote(cmd)}"
+    env = os.environ.copy()
+    env["SSHPASS"] = password
+    try:
+        proc = subprocess.run(
+            ["sshpass", "-e"] + prefix + [wrapped],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+            env=env,
         )
     except subprocess.TimeoutExpired as exc:
         return 124, (exc.stdout or ""), (exc.stderr or f"probe_timeout_after_{timeout}s")
@@ -815,15 +982,24 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, Any], list[str]]:
             if "@" not in args.remote:
                 raise SystemExit("--remote must be in user@host format when using --password.")
             username, host = args.remote.split("@", 1)
-            session = ParamikoRemoteSession(
-                host=host,
-                username=username,
-                password=args.password,
-                port=args.port or 22,
-                timeout=args.timeout,
-                known_hosts_files=list(getattr(args, "trust_known_hosts_files", [])),
-            )
-            run_fn = lambda command: session.run(command)
+            if paramiko is not None:
+                session = ParamikoRemoteSession(
+                    host=host,
+                    username=username,
+                    password=args.password,
+                    port=args.port or 22,
+                    timeout=args.timeout,
+                    known_hosts_files=list(getattr(args, "trust_known_hosts_files", [])),
+                )
+                run_fn = lambda command: session.run(command)
+            else:
+                if shutil.which("sshpass") is None:
+                    raise SystemExit(
+                        "Password-based remote mode requires paramiko or sshpass. "
+                        "Install paramiko, or install sshpass and retry."
+                    )
+                remote_prefix = build_ssh_prefix(args, batch_mode=False)
+                run_fn = lambda command: run_remote_password_sshpass(remote_prefix, command, args.timeout, args.password)
         elif args.remote:
             run_fn = lambda command: run_remote(remote_prefix, command, args.timeout)
         else:
@@ -885,6 +1061,11 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, Any], list[str]]:
             "No findings are asserted without explicit evidence linkage."
         )
 
+        if str(trust_info.get("mode", "")) == "tofu":
+            unknowns.append(
+                "Remote host key was accepted on first seen (TOFU); verify fingerprint out-of-band before high-impact decisions."
+            )
+
         payload: dict[str, Any] = {
             "case_id": incident_id,
             "host_id": sanitize_name(host_ip if host_ip not in {"unknown-remote", "127.0.0.1"} else host_name),
@@ -944,6 +1125,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--jump", help="SSH jump host user@host.")
     parser.add_argument("--known-hosts", help="Known-hosts file containing the pinned server key.")
     parser.add_argument("--host-key-fingerprint", help="Pinned remote host key fingerprint in SHA256:<base64> form.")
+    parser.add_argument("--trust-on-first-use", action="store_true", help="Accept the remote host key on first seen and pin it into case metadata when no prior trust source exists.")
     parser.add_argument("--password", help="Deprecated insecure SSH password input. Disabled unless --allow-insecure-cli-password is set.")
     parser.add_argument("--password-env", help="Read SSH password from environment variable name.")
     parser.add_argument("--prompt-password", action="store_true", help="Prompt securely for the SSH password instead of using command-line plaintext.")

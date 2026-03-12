@@ -63,6 +63,7 @@ Support the safest available access path:
 4. SSH with username and password.
 5. SSH via jump host.
 6. Platform console access.
+7. Shortcut remote input with `--remote-user <USER> --remote-ip <IP>` in `run_readonly_workflow.py`.
 
 Before connecting remotely, confirm:
 
@@ -84,7 +85,7 @@ Follow this order unless the user gives a narrower scope:
 2. Preserve scene.
    - Avoid restarts, config edits, cleanup, and log rotation until read-only capture is complete.
 3. Trust bootstrap and verify environment trust.
-   - Confirm host-key trust first. Reject unknown host keys by default unless an explicit out-of-band fingerprint is provided. Then check distro family, package manager family, actual privilege level, command path trust, alias/function wrapping, and missing-command fallbacks such as `ss -> netstat -> lsof -> /proc/net` or `ps -> /proc`.
+   - Confirm host-key trust first. Reject unknown host keys by default unless an explicit out-of-band fingerprint is provided. For urgent first-time internal triage, `--trust-on-first-use` is available and must be recorded in the report as weaker trust bootstrap. Then check distro family, package manager family, actual privilege level, command path trust, alias/function wrapping, and missing-command fallbacks such as `ss -> netstat -> lsof -> /proc/net` or `ps -> /proc`.
 4. Collect read-only evidence.
    - Prefer the bundled workflow scripts and case-bundle layout under `./reports/`.
    - If Python or bundled scripts are unavailable, switch to the manual shell-only fallback flow.
@@ -95,7 +96,7 @@ Follow this order unless the user gives a narrower scope:
 7. Review initial access and cloud/container paths.
    - Check weak-credential evidence, SSH key surfaces, metadata-service traces, Docker, Kubernetes, cloud-init, CI/CD clues, and supply-chain indicators when visible.
 8. Reconstruct the scene.
-   - Build findings, normalized timeline, and IP traceability only from evidence.
+   - Build findings, normalized timeline, IP traceability, and a hypothesis matrix (`hypothesis -> supporting evidence -> counter evidence -> status`) only from evidence.
 9. Compare against history when available.
    - Use same-host case diffing and same-host clean baselines to suppress repeated normal patterns.
 10. Export the report.
@@ -109,15 +110,24 @@ For most investigations, prefer the bundled workflow and state `[MODE: AUTOMATED
 python scripts/run_readonly_workflow.py ...
 ```
 
+When the user directly provides IP, username, and password, use the shortcut remote form (prefer env-based password input):
+
+```bash
+python scripts/run_readonly_workflow.py --remote-user <USER> --remote-ip <IP> --password-env <ENV_VAR> --trust-on-first-use ...
+```
+
 Behavior:
 
 1. Performs trust bootstrap for remote collection using `known_hosts` or a pinned fingerprint.
 2. Writes the case bundle under the current working directory in `./reports/<case>/` by default.
 3. Performs low-impact read-only collection with per-probe timeouts.
 4. Enriches evidence and reconstructs scene.
+   - Includes GPU-aware correlation: GPU adapters, utilization, GPU compute-process mapping, and suspicious PID/keyword correlation when available.
 5. Validates the case bundle.
 6. Optionally applies a same-host clean baseline when `--baseline <BASELINE_JSON>` is provided.
 7. Exports `report.md`, `report.zh-CN.md`, `reports/index.md`, `reports/index.zh-CN.md`, `reports/management-summary.md`, `reports/management-summary.zh-CN.md`, `reports/soc-summary.md`, and `reports/soc-summary.zh-CN.md`. The index pages act as case-bundle landing pages with status cards, key-risk summaries, reading order, report inventories, and directory status, and full reports use source-grouped evidence navigation, fixed section anchors, and clickable evidence IDs that jump to detail blocks and link to artifact files.
+8. Accepts operator-friendly remote shortcut input: `--remote-user <USER> --remote-ip <IP>` with password env/prompt, and optional `--trust-on-first-use` for first-seen hosts.
+9. Generates `reports/operator-brief.zh-CN.md`, `reports/operator-brief.md`, and `reports/operator-brief.json` for non-specialist users.
 
 If the user wants staged control, use these scripts separately:
 
@@ -128,6 +138,8 @@ If the user wants staged control, use these scripts separately:
 5. `scripts/export_investigation_report.py`
 6. `scripts/compare_case_bundles.py`
 7. `scripts/refresh_case_bundle.py`
+8. `scripts/generate_operator_brief.py`
+9. `scripts/nl_control.py`
 
 ## Same-Host Baseline Rules
 

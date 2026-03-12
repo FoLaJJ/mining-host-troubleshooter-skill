@@ -234,6 +234,11 @@ def localize_auto_text_zh_cn(text: str) -> str:
         "Kernel module, eBPF, or taint-related output can indicate deeper persistence or may reflect benign platform state; dedicated forensic tooling is required for confirmation.": "内核模块、eBPF 或 taint 相关输出可能指向更深层的持久化，也可能只是平台正常状态；需要更专门的取证工具进一步确认。",
         "Keyword-based IOC hits are suggestive, but do not independently prove malicious mining intent.": "基于关键字的 IOC 命中只具提示意义，不能单独证明存在恶意挖矿意图。",
         "Observed in authentication evidence only; upstream attribution path is not established in this case.": "该 IP 目前仅在认证类证据中出现，本案尚未建立其上游归因路径。",
+        "No direct miner-like process keyword match was observed in this pass.": "本轮未观察到直接的矿工类进程关键字命中。",
+        "GPU runtime visibility is present, but no direct miner-linked GPU process is confirmed yet.": "已获取 GPU 运行时可见性，但暂未确认与矿工直接关联的 GPU 进程。",
+        "Persistence review surfaces contain suspicious lines and require analyst confirmation.": "持久化复核面存在可疑线索，需分析人员进一步确认。",
+        "No direct pool/wallet keyword hit in this pass.": "本轮未命中直接矿池或钱包关键字。",
+        "Primary log artifacts show missing/tampered/suspicious state.": "关键日志产物存在缺失、篡改或可疑状态。",
         "yes": "是",
         "no": "否",
         "True": "是",
@@ -275,6 +280,20 @@ def localize_auto_text_zh_cn(text: str) -> str:
         (
             re.compile(r"^Kernel or eBPF review surfaces returned (\d+) line\(s\) that may require deeper rootkit-oriented triage\.$"),
             lambda m: f"内核或 eBPF 复核面共返回 {m.group(1)} 条可能需要更深入 rootkit 向分诊的记录。",
+        ),
+        (
+            re.compile(
+                r"^GPU evidence reports (\d+) adapter/utilization line\(s\), (\d+) active compute process record\(s\), and (\d+) suspicious GPU process correlation\(s\)\.$"
+            ),
+            lambda m: f"GPU 证据显示：适配器/利用率记录 {m.group(1)} 条，计算进程记录 {m.group(2)} 条，可疑 GPU 进程关联 {m.group(3)} 条。",
+        ),
+        (
+            re.compile(r"^GPU activity observed \(peak utilization=(\d+)%\), but no direct miner-linked GPU process was confirmed\.$"),
+            lambda m: f"已观察到 GPU 活动（峰值利用率 {m.group(1)}%），但未确认直接与矿工关联的 GPU 进程。",
+        ),
+        (
+            re.compile(r"^Authentication pressure observed \(failed=(\d+), invalid=(\d+)\)\.$"),
+            lambda m: f"认证压力已观察到（失败密码 {m.group(1)} 次，无效用户 {m.group(2)} 次）。",
         ),
     ]
     for pattern, renderer in pattern_rules:
@@ -378,6 +397,8 @@ def build_management_view(data: dict[str, Any], redact: bool, case_dir: str | No
                 ["Traceable IPs", str(ctx["trace_counts"]["traced"])],
                 ["Untraceable / Unknown IPs", str(ctx["trace_counts"]["untraceable"] + ctx["trace_counts"]["unknown"])],
                 ["Log Integrity Concerns", str(ctx["log_risk_count"])],
+                ["Hypothesis Matrix Entries", str(len(ctx["hypothesis_matrix"]))],
+                ["GPU Suspicious Process Count", str(safe_int(ctx["scene_reconstruction"].get("gpu_suspicious_process_count", 0)))],
                 ["Expected Workload", maybe_redact(str(data.get("expected_workload", "") or "not provided"))],
             ],
         ),
@@ -495,6 +516,8 @@ def build_management_view_zh_cn(data: dict[str, Any], redact: bool, case_dir: st
                 ["可溯源 IP", str(ctx["trace_counts"]["traced"])],
                 ["未溯源 / 未知 IP", str(ctx["trace_counts"]["untraceable"] + ctx["trace_counts"]["unknown"])],
                 ["日志完整性风险", str(ctx["log_risk_count"])],
+                ["关联矩阵条目", str(len(ctx["hypothesis_matrix"]))],
+                ["GPU 可疑进程数量", str(safe_int(ctx["scene_reconstruction"].get("gpu_suspicious_process_count", 0)))],
                 ["预期工作负载", maybe_redact(str(data.get("expected_workload", "") or "未提供"))],
             ],
         ),
@@ -587,6 +610,8 @@ def build_soc_view(data: dict[str, Any], redact: bool, case_dir: str | None = No
                 ["Host NTP Synchronized", maybe_redact(str(time_norm.get("host_ntp_synchronized", "unknown")))],
                 ["Findings", f"{ctx['confirmed_count']} confirmed / {ctx['inconclusive_count']} inconclusive"],
                 ["Log Integrity Risks", str(ctx["log_risk_count"])],
+                ["Hypothesis Matrix Entries", str(len(ctx["hypothesis_matrix"]))],
+                ["GPU Suspicious Process Count", str(safe_int(scene_reconstruction.get("gpu_suspicious_process_count", 0)))],
             ],
         ),
         "",
@@ -601,6 +626,9 @@ def build_soc_view(data: dict[str, Any], redact: bool, case_dir: str | None = No
     append_sample_group(lines, "Initial-Access Review Samples", as_list(scene_reconstruction.get("initial_access_review_samples")), maybe_redact, limit=4, max_len=140)
     append_sample_group(lines, "Container / Cloud Review Samples", as_list(scene_reconstruction.get("container_cloud_review_samples")), maybe_redact, limit=4, max_len=140)
     append_sample_group(lines, "Kernel / eBPF Samples", as_list(scene_reconstruction.get("kernel_review_samples")), maybe_redact, limit=4, max_len=140)
+    append_sample_group(lines, "GPU Adapter Samples", as_list(scene_reconstruction.get("gpu_adapter_samples")), maybe_redact, limit=4, max_len=140)
+    append_sample_group(lines, "GPU Compute Process Samples", as_list(scene_reconstruction.get("gpu_compute_process_samples")), maybe_redact, limit=4, max_len=140)
+    append_sample_group(lines, "GPU Suspicious Process Samples", as_list(scene_reconstruction.get("gpu_suspicious_process_samples")), maybe_redact, limit=4, max_len=140)
     lines.extend([anchor_tag("soc-judgments"), "## Key Judgments"])
     if key_items:
         for item in key_items:
@@ -692,6 +720,8 @@ def build_soc_view_zh_cn(data: dict[str, Any], redact: bool, case_dir: str | Non
                 ["主机 NTP 同步", maybe_redact_zh(str(time_norm.get("host_ntp_synchronized", "unknown")))],
                 ["已确认 / 待定", f"{ctx['confirmed_count']} / {ctx['inconclusive_count']}"],
                 ["日志完整性风险", str(ctx["log_risk_count"])],
+                ["关联矩阵条目", str(len(ctx["hypothesis_matrix"]))],
+                ["GPU 可疑进程数量", str(safe_int(scene_reconstruction.get("gpu_suspicious_process_count", 0)))],
             ],
         ),
         "",
@@ -706,6 +736,9 @@ def build_soc_view_zh_cn(data: dict[str, Any], redact: bool, case_dir: str | Non
     append_sample_group(lines, "初始访问复核样本", as_list(scene_reconstruction.get("initial_access_review_samples")), maybe_redact, limit=4, max_len=140, empty_label="无。")
     append_sample_group(lines, "容器 / 云侧复核样本", as_list(scene_reconstruction.get("container_cloud_review_samples")), maybe_redact, limit=4, max_len=140, empty_label="无。")
     append_sample_group(lines, "Kernel / eBPF 样本", as_list(scene_reconstruction.get("kernel_review_samples")), maybe_redact, limit=4, max_len=140, empty_label="无。")
+    append_sample_group(lines, "GPU 适配器样本", as_list(scene_reconstruction.get("gpu_adapter_samples")), maybe_redact, limit=4, max_len=140, empty_label="无。")
+    append_sample_group(lines, "GPU 计算进程样本", as_list(scene_reconstruction.get("gpu_compute_process_samples")), maybe_redact, limit=4, max_len=140, empty_label="无。")
+    append_sample_group(lines, "GPU 可疑进程样本", as_list(scene_reconstruction.get("gpu_suspicious_process_samples")), maybe_redact, limit=4, max_len=140, empty_label="无。")
     lines.extend([anchor_tag("soc-judgments"), "## 关键研判"])
     if key_items:
         for item in key_items:
@@ -854,6 +887,8 @@ def report_inventory_lines(case_dir: str | None) -> list[str]:
         ("./management-summary.zh-CN.md", "management-summary.zh-CN.md", "Management Summary (ZH-CN)", True),
         ("./soc-summary.md", "soc-summary.md", "SOC Summary", True),
         ("./soc-summary.zh-CN.md", "soc-summary.zh-CN.md", "SOC Summary (ZH-CN)", True),
+        ("./operator-brief.md", "operator-brief.md", "Operator Brief", True),
+        ("./operator-brief.zh-CN.md", "operator-brief.zh-CN.md", "Operator Brief (ZH-CN)", True),
     ]
     out: list[str] = []
     for href, filename, label, in_reports_dir in reports:
@@ -874,6 +909,8 @@ def report_inventory_lines_zh_cn(case_dir: str | None) -> list[str]:
         ("./management-summary.zh-CN.md", "management-summary.zh-CN.md", "管理摘要", True),
         ("./soc-summary.md", "soc-summary.md", "SOC 摘要（英文）", True),
         ("./soc-summary.zh-CN.md", "soc-summary.zh-CN.md", "SOC 摘要", True),
+        ("./operator-brief.md", "operator-brief.md", "操作简报（英文）", True),
+        ("./operator-brief.zh-CN.md", "operator-brief.zh-CN.md", "操作简报", True),
     ]
     out: list[str] = []
     for href, filename, label, in_reports_dir in reports:
@@ -885,6 +922,7 @@ def report_inventory_lines_zh_cn(case_dir: str | None) -> list[str]:
 
 def latest_judgment_lines(data: dict[str, Any], case_dir: str | None = None, limit: int = 3) -> list[str]:
     findings = [as_dict(x) for x in as_list(data.get("findings"))]
+    hypothesis_matrix = [as_dict(x) for x in as_list(data.get("hypothesis_matrix"))]
     evidence_items = [as_dict(x) for x in as_list(data.get("evidence"))]
     evid_idx = evidence_index(evidence_items)
     items = top_judgments(findings, evid_idx, limit=limit)
@@ -1005,9 +1043,10 @@ def key_risk_lines_zh_cn(data: dict[str, Any], case_dir: str | None = None) -> l
 def reading_order_lines() -> list[str]:
     return [
         "- Step 1: `index.md` for bundle status and report inventory.",
-        "- Step 2: `management-summary.md` or `soc-summary.md` for audience-specific triage.",
-        "- Step 3: `../report.md` for evidence-backed conclusions and detailed artifacts.",
-        "- Step 4: `artifacts/` and `meta/` only when deeper verification is required.",
+        "- Step 2: `operator-brief.md` for non-specialist decision support.",
+        "- Step 3: `management-summary.md` or `soc-summary.md` for audience-specific triage.",
+        "- Step 4: `../report.md` for evidence-backed conclusions and detailed artifacts.",
+        "- Step 5: `artifacts/` and `meta/` only when deeper verification is required.",
     ]
 
 
@@ -1015,9 +1054,10 @@ def reading_order_lines() -> list[str]:
 def reading_order_lines_zh_cn() -> list[str]:
     return [
         "- 第 1 步：先看 `index.zh-CN.md`，确认案件状态、目录完整性和报告清单。",
-        "- 第 2 步：按受众选择 `management-summary.zh-CN.md` 或 `soc-summary.zh-CN.md` 做快速研判。",
-        "- 第 3 步：进入 `../report.zh-CN.md` 查看证据链、时间线和详细产物。",
-        "- 第 4 步：只有在需要进一步复核时，再进入 `artifacts/` 与 `meta/` 深挖原始产物。",
+        "- 第 2 步：先看 `operator-brief.zh-CN.md`，快速获得面向非安全人员的结论。",
+        "- 第 3 步：按受众选择 `management-summary.zh-CN.md` 或 `soc-summary.zh-CN.md` 做快速研判。",
+        "- 第 4 步：进入 `../report.zh-CN.md` 查看证据链、时间线和详细产物。",
+        "- 第 5 步：只有在需要进一步复核时，再进入 `artifacts/` 与 `meta/` 深挖原始产物。",
     ]
 
 
@@ -1047,6 +1087,7 @@ def build_case_bundle_index(data: dict[str, Any], case_dir: str | None = None) -
         f"- **Host:** `{host.get('name', 'unknown')}` (`{host.get('ip', 'unknown')}`)",
         f"- **Evidence Items:** `{len(as_list(data.get('evidence')))}` | **Findings:** `{len(as_list(data.get('findings')))}` | **Timeline:** `{len(as_list(data.get('timeline')))}`",
         f"- **Auth Source IPs:** `{len(as_list(scene_reconstruction.get('auth_source_ips')))}` | **Listening Ports:** `{len(as_list(scene_reconstruction.get('listening_ports')))}`",
+        f"- **Hypothesis Matrix:** `{len(as_list(data.get('hypothesis_matrix')))}` | **GPU Suspicious Processes:** `{safe_int(scene_reconstruction.get('gpu_suspicious_process_count', 0))}`",
         "",
         anchor_tag("bundle-summary"),
         "## Bundle Summary",
@@ -1110,6 +1151,7 @@ def build_case_bundle_index_zh_cn(data: dict[str, Any], case_dir: str | None = N
         f"- **主机：** `{host.get('name', 'unknown')}` (`{host.get('ip', 'unknown')}`)",
         f"- **证据项：** `{len(as_list(data.get('evidence')))}` | **研判项：** `{len(as_list(data.get('findings')))}` | **时间线：** `{len(as_list(data.get('timeline')))}`",
         f"- **认证来源 IP：** `{len(as_list(scene_reconstruction.get('auth_source_ips')))}` | **监听端口：** `{len(as_list(scene_reconstruction.get('listening_ports')))}`",
+        f"- **关联矩阵：** `{len(as_list(data.get('hypothesis_matrix')))}` | **GPU 可疑进程：** `{safe_int(scene_reconstruction.get('gpu_suspicious_process_count', 0))}`",
         "",
         anchor_tag("bundle-summary"),
         "## 案件摘要",
@@ -1208,6 +1250,7 @@ def investigation_posture_payload(ctx: dict[str, Any]) -> dict[str, Any]:
     scene = ctx["scene_reconstruction"]
     process_hits = safe_int(scene.get("process_ioc_match_count", 0))
     network_hits = safe_int(scene.get("network_ioc_hit_count", 0))
+    gpu_hits = safe_int(scene.get("gpu_suspicious_process_count", 0))
     access_hits = safe_int(scene.get("initial_access_review_hit_count", 0))
     container_hits = safe_int(scene.get("container_cloud_review_hit_count", 0))
     kernel_hits = safe_int(scene.get("kernel_review_hit_count", 0))
@@ -1216,7 +1259,7 @@ def investigation_posture_payload(ctx: dict[str, Any]) -> dict[str, Any]:
     )
     posture = overall_confidence_posture(ctx)
 
-    if process_hits or network_hits:
+    if process_hits or network_hits or gpu_hits:
         verdict = "Direct miner-like runtime indicators were observed during collection."
         boundary = "Triage should proceed as a compromise-oriented case, but attribution still requires additional evidence."
         focus = "Prioritize runtime lineage, parent-child process review, wallet/pool traces, and persistence pivots."
@@ -1239,6 +1282,7 @@ def investigation_posture_payload(ctx: dict[str, Any]) -> dict[str, Any]:
         "focus": focus,
         "process_hits": process_hits,
         "network_hits": network_hits,
+        "gpu_hits": gpu_hits,
         "access_hits": access_hits,
         "container_hits": container_hits,
         "kernel_hits": kernel_hits,
@@ -1267,6 +1311,93 @@ def append_sample_group(
     lines.append("")
 
 
+def render_hypothesis_matrix_section(
+    lines: list[str],
+    matrix_items: list[dict[str, Any]],
+    evid_idx: dict[str, dict[str, Any]],
+    case_dir: str | None,
+    maybe_redact,
+) -> None:
+    lines.append(anchor_tag("report-hypothesis-matrix"))
+    lines.append("## Hypothesis Matrix")
+    if not matrix_items:
+        lines.extend(["No hypothesis matrix entries were provided.", ""])
+        return
+    rows: list[list[str]] = []
+    for item in matrix_items:
+        support = evidence_reference_list(as_list(item.get("supporting_evidence_ids")), evid_idx, case_dir)
+        counter = evidence_reference_list(as_list(item.get("counter_evidence_ids")), evid_idx, case_dir)
+        rows.append(
+            [
+                maybe_redact(str(item.get("hypothesis_id", "unknown"))),
+                maybe_redact(str(item.get("title", "unknown"))),
+                maybe_redact(str(item.get("status", "unknown"))),
+                maybe_redact(str(item.get("confidence", "unknown"))),
+                support,
+                counter if counter != "-" else "-",
+                maybe_redact(compact_text(str(item.get("summary", "")), max_len=160)),
+            ]
+        )
+    lines.append(
+        render_table(
+            ["Hypothesis", "Title", "Status", "Confidence", "Support Evidence", "Counter Evidence", "Summary"],
+            rows,
+        )
+    )
+    lines.append("")
+
+
+def render_hypothesis_matrix_section_zh_cn(
+    lines: list[str],
+    matrix_items: list[dict[str, Any]],
+    evid_idx: dict[str, dict[str, Any]],
+    case_dir: str | None,
+    maybe_redact,
+) -> None:
+    lines.append(anchor_tag("report-hypothesis-matrix"))
+    lines.append("## 假设-证据关联矩阵")
+    if not matrix_items:
+        lines.extend(["未提供关联矩阵条目。", ""])
+        return
+    status_map = {
+        "supported": "支持",
+        "inconclusive": "待定",
+        "not_observed": "未观察到",
+        "refuted": "被反证",
+    }
+    confidence_map = {"high": "高", "medium": "中", "low": "低", "unknown": "未知"}
+    title_map = {
+        "CPU runtime miner hypothesis": "CPU 运行时挖矿假设",
+        "GPU runtime miner hypothesis": "GPU 运行时挖矿假设",
+        "Credential or initial-access abuse hypothesis": "凭据或初始访问滥用假设",
+        "Persistence foothold hypothesis": "持久化落点假设",
+        "Network IOC and outbound control hypothesis": "网络 IOC 与外联控制假设",
+        "Log tampering hypothesis": "日志篡改假设",
+    }
+    rows: list[list[str]] = []
+    for item in matrix_items:
+        support = evidence_reference_list_zh_cn(as_list(item.get("supporting_evidence_ids")), evid_idx, case_dir)
+        counter = evidence_reference_list_zh_cn(as_list(item.get("counter_evidence_ids")), evid_idx, case_dir)
+        rows.append(
+            [
+                maybe_redact(str(item.get("hypothesis_id", "unknown"))),
+                maybe_redact(title_map.get(str(item.get("title", "unknown")), str(item.get("title", "unknown")))),
+                maybe_redact(status_map.get(str(item.get("status", "unknown")), str(item.get("status", "unknown")))),
+                maybe_redact(confidence_map.get(str(item.get("confidence", "unknown")), str(item.get("confidence", "unknown")))),
+                support,
+                counter if counter != "-" else "-",
+                maybe_redact(localize_auto_text_zh_cn(compact_text(str(item.get("summary", "")), max_len=160))),
+            ]
+        )
+    lines.append(
+        render_table(
+            ["假设编号", "假设内容", "状态", "置信度", "支撑证据", "反证证据", "说明"],
+            rows,
+        )
+    )
+    lines.append("")
+
+
 def top_conclusion_lines(
     ctx: dict[str, Any],
     maybe_redact,
@@ -1276,6 +1407,7 @@ def top_conclusion_lines(
     posture_info = investigation_posture_payload(ctx)
     process_hits = posture_info["process_hits"]
     network_hits = posture_info["network_hits"]
+    gpu_hits = posture_info["gpu_hits"]
     access_hits = posture_info["access_hits"]
     container_hits = posture_info["container_hits"]
     kernel_hits = posture_info["kernel_hits"]
@@ -1295,7 +1427,7 @@ def top_conclusion_lines(
         f"- **Read-Only Scope:** `0` state-changing actions executed during this collection.",
         "",
         "### Evidence Basis",
-        f"- **Runtime Indicators:** process IOC hits `{process_hits}`, network IOC hits `{network_hits}`.",
+        f"- **Runtime Indicators:** process IOC hits `{process_hits}`, network IOC hits `{network_hits}`, GPU suspicious-process hits `{gpu_hits}`.",
         f"- **Review Surfaces:** initial access `{access_hits}`, container/cloud `{container_hits}`, kernel/eBPF `{kernel_hits}`.",
         f"- **Finding State:** `{ctx['confirmed_count']}` confirmed, `{ctx['inconclusive_count']}` inconclusive.",
         f"- **Expected Workload Context:** {expected_workload}.",
@@ -1304,7 +1436,7 @@ def top_conclusion_lines(
         lines.append("- **Highest-Signal Judgments:**")
         for item in top_items:
             evidence_ids = item["evidence_ids"].split(", ") if item["evidence_ids"] != "none" else []
-            chain = compact_evidence_chain_zh_cn(evidence_ids, ctx["evid_idx"], case_dir, limit=3)
+            chain = compact_evidence_chain(evidence_ids, ctx["evid_idx"], case_dir, limit=3)
             lines.append(
                 f"  - `{item['id']}` [{claim_type_label(item['claim_type'])}/{item['status']}/{item['confidence']}] "
                 f"{maybe_redact(compact_text(item['statement'], max_len=180))} | evidence: {chain}"
@@ -1334,6 +1466,7 @@ def top_conclusion_lines_zh_cn(
     posture_info = investigation_posture_payload(ctx)
     process_hits = posture_info["process_hits"]
     network_hits = posture_info["network_hits"]
+    gpu_hits = posture_info["gpu_hits"]
     access_hits = posture_info["access_hits"]
     container_hits = posture_info["container_hits"]
     kernel_hits = posture_info["kernel_hits"]
@@ -1367,7 +1500,7 @@ def top_conclusion_lines_zh_cn(
         "- **只读约束：** 本次采集未执行任何状态变更命令。",
         "",
         "### 证据依据",
-        f"- **运行时指标：** 进程 IOC 命中 `{process_hits}`，网络 IOC 命中 `{network_hits}`。",
+        f"- **运行时指标：** 进程 IOC 命中 `{process_hits}`，网络 IOC 命中 `{network_hits}`，GPU 可疑进程命中 `{gpu_hits}`。",
         f"- **复核面：** 初始访问 `{access_hits}`，容器/云 `{container_hits}`，内核/eBPF `{kernel_hits}`。",
         f"- **研判状态：** 已确认 `{ctx['confirmed_count']}` 条，待定 `{ctx['inconclusive_count']}` 条。",
         f"- **业务上下文：** 预期工作负载 {expected_workload}。",
@@ -1458,6 +1591,7 @@ def prepare_report_context(
     host = as_dict(data.get("host"))
     evidence_items = [as_dict(x) for x in as_list(data.get("evidence"))]
     findings = [as_dict(x) for x in as_list(data.get("findings"))]
+    hypothesis_matrix = [as_dict(x) for x in as_list(data.get("hypothesis_matrix"))]
     ip_traces = [as_dict(x) for x in as_list(data.get("ip_traces"))]
     log_integrity = [as_dict(x) for x in as_list(data.get("log_integrity"))]
     actions = [as_dict(x) for x in as_list(data.get("actions"))]
@@ -1482,6 +1616,14 @@ def prepare_report_context(
         if missing:
             warnings.append(
                 f"Finding '{finding.get('id', 'unknown')}' references missing evidence IDs: {', '.join(missing)}"
+            )
+    for item in hypothesis_matrix:
+        support_ids = [str(x) for x in as_list(item.get("supporting_evidence_ids"))]
+        counter_ids = [str(x) for x in as_list(item.get("counter_evidence_ids"))]
+        missing = [x for x in support_ids + counter_ids if x not in evid_idx]
+        if missing:
+            warnings.append(
+                f"Hypothesis '{item.get('hypothesis_id', 'unknown')}' references missing evidence IDs: {', '.join(sorted(set(missing)))}"
             )
 
     for ip_item in ip_traces:
@@ -1531,6 +1673,7 @@ def prepare_report_context(
         "warnings": warnings,
         "evidence_items": evidence_items,
         "findings": findings,
+        "hypothesis_matrix": hypothesis_matrix,
         "ip_traces": ip_traces,
         "log_integrity": log_integrity,
         "actions": actions,
@@ -1617,6 +1760,7 @@ def build_report(data: dict[str, Any], redact: bool, strict: bool, case_dir: str
         "- [Workflow Checkpoints](#report-workflow-checkpoints)",
         "- [Evidence Source Navigator](#report-evidence-source-navigator)",
         "- [Evidence Index](#report-evidence-index)",
+        "- [Hypothesis Matrix](#report-hypothesis-matrix)",
         "- [Findings](#report-findings)",
         "- [Timeline](#report-timeline)",
         "- [IP Traceability](#report-ip-traceability)",
@@ -1698,6 +1842,10 @@ def build_report(data: dict[str, Any], redact: bool, strict: bool, case_dir: str
         f"- **Initial-Access Review Hit Count:** `{scene_reconstruction.get('initial_access_review_hit_count', 0)}`",
         f"- **Container / Cloud Review Hit Count:** `{scene_reconstruction.get('container_cloud_review_hit_count', 0)}`",
         f"- **Kernel / eBPF Review Hit Count:** `{scene_reconstruction.get('kernel_review_hit_count', 0)}`",
+        f"- **GPU Probe Count:** `{len(as_list(scene_reconstruction.get('gpu_probe_ids')))}`",
+        f"- **GPU Peak Utilization:** `{scene_reconstruction.get('gpu_peak_utilization_percent', 0)}%`",
+        f"- **GPU Compute Process Count:** `{scene_reconstruction.get('gpu_compute_process_count', 0)}`",
+        f"- **GPU Suspicious Process Count:** `{scene_reconstruction.get('gpu_suspicious_process_count', 0)}`",
         "",
     ])
     append_sample_section(lines, "Auth Source IPs", as_list(scene_reconstruction.get("auth_source_ips")), maybe_redact, limit=12)
@@ -1707,6 +1855,9 @@ def build_report(data: dict[str, Any], redact: bool, strict: bool, case_dir: str
     append_sample_section(lines, "Initial-Access Review Samples", as_list(scene_reconstruction.get("initial_access_review_samples")), maybe_redact, limit=10)
     append_sample_section(lines, "Container / Cloud Review Samples", as_list(scene_reconstruction.get("container_cloud_review_samples")), maybe_redact, limit=10)
     append_sample_section(lines, "Kernel / eBPF Review Samples", as_list(scene_reconstruction.get("kernel_review_samples")), maybe_redact, limit=10)
+    append_sample_section(lines, "GPU Adapter Samples", as_list(scene_reconstruction.get("gpu_adapter_samples")), maybe_redact, limit=8)
+    append_sample_section(lines, "GPU Compute Process Samples", as_list(scene_reconstruction.get("gpu_compute_process_samples")), maybe_redact, limit=8)
+    append_sample_section(lines, "GPU Suspicious Process Samples", as_list(scene_reconstruction.get("gpu_suspicious_process_samples")), maybe_redact, limit=8)
     lines.extend([
         "",
         "## Coverage and False-Positive Control",
@@ -1719,6 +1870,14 @@ def build_report(data: dict[str, Any], redact: bool, strict: bool, case_dir: str
     if baseline_assessment:
         lines.append(f"- **Baseline Assessment:** `{maybe_redact(str(baseline_assessment.get('assessment_status', 'unknown')))}`")
     lines.append("")
+
+    render_hypothesis_matrix_section(
+        lines,
+        ctx["hypothesis_matrix"],
+        ctx["evid_idx"],
+        case_dir,
+        maybe_redact,
+    )
 
     append_checkpoint_section(lines, anchor_tag("report-workflow-checkpoints") + "\n## Workflow Checkpoints", workflow_history, maybe_redact, limit=12)
 
@@ -2037,6 +2196,7 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
         "- [流程检查点](#report-workflow-checkpoints)",
         "- [证据来源导航](#report-evidence-source-navigator)",
         "- [证据索引](#report-evidence-index)",
+        "- [假设-证据关联矩阵](#report-hypothesis-matrix)",
         "- [结论与研判](#report-findings)",
         "- [时间线](#report-timeline)",
         "- [IP 溯源](#report-ip-traceability)",
@@ -2118,6 +2278,10 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
         f"- **初始访问复核命中数：** `{scene_reconstruction.get('initial_access_review_hit_count', 0)}`",
         f"- **容器 / 云侧复核命中数：** `{scene_reconstruction.get('container_cloud_review_hit_count', 0)}`",
         f"- **内核 / eBPF 复核命中数：** `{scene_reconstruction.get('kernel_review_hit_count', 0)}`",
+        f"- **GPU 探针数量：** `{len(as_list(scene_reconstruction.get('gpu_probe_ids')))}`",
+        f"- **GPU 峰值利用率：** `{scene_reconstruction.get('gpu_peak_utilization_percent', 0)}%`",
+        f"- **GPU 计算进程数量：** `{scene_reconstruction.get('gpu_compute_process_count', 0)}`",
+        f"- **GPU 可疑进程数量：** `{scene_reconstruction.get('gpu_suspicious_process_count', 0)}`",
         "",
     ])
     append_sample_section_zh_cn(lines, "认证来源 IP", as_list(scene_reconstruction.get("auth_source_ips")), limit=12)
@@ -2127,6 +2291,9 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
     append_sample_section_zh_cn(lines, "初始访问复核样本", as_list(scene_reconstruction.get("initial_access_review_samples")), limit=10)
     append_sample_section_zh_cn(lines, "容器 / 云侧复核样本", as_list(scene_reconstruction.get("container_cloud_review_samples")), limit=10)
     append_sample_section_zh_cn(lines, "内核 / eBPF 复核样本", as_list(scene_reconstruction.get("kernel_review_samples")), limit=10)
+    append_sample_section_zh_cn(lines, "GPU 适配器样本", as_list(scene_reconstruction.get("gpu_adapter_samples")), limit=8)
+    append_sample_section_zh_cn(lines, "GPU 计算进程样本", as_list(scene_reconstruction.get("gpu_compute_process_samples")), limit=8)
+    append_sample_section_zh_cn(lines, "GPU 可疑进程样本", as_list(scene_reconstruction.get("gpu_suspicious_process_samples")), limit=8)
 
     lines.extend([
         "## 覆盖范围与误报控制",
@@ -2139,6 +2306,14 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
     if baseline_assessment:
         lines.append(f"- **基线评估：** `{maybe_redact(str(baseline_assessment.get('assessment_status', 'unknown')))}`")
     lines.append("")
+
+    render_hypothesis_matrix_section_zh_cn(
+        lines,
+        ctx["hypothesis_matrix"],
+        ctx["evid_idx"],
+        case_dir,
+        maybe_redact,
+    )
 
     append_checkpoint_section_zh_cn(lines, workflow_history, limit=12)
 

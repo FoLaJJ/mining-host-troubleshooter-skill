@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 *.pyo
+gcm-diagnose.log
 
 # Local extracted artifacts (may contain sensitive content)
 *.txt
