@@ -28,3 +28,14 @@ Maintain this repository as a reusable troubleshooting skill, not as an ad-hoc s
 2. Prefer deterministic scripts for repeatable tasks.
 3. Keep documentation concise and operational.
 4. Keep examples placeholder-based and avoid concrete host identifiers in README/references unless they are explicitly marked as live evidence examples.
+
+## Pre-Push Sensitive Check (Maintainers)
+
+Run these checks before pushing to GitHub:
+
+```powershell
+rg -n -S -e "-----BEGIN [A-Z ]*PRIVATE KEY-----" -e "ssh-ed25519\\s+[A-Za-z0-9+/=]{20,}" -e "AKIA[0-9A-Z]{16}" (git ls-files)
+rg -n -S -e "(?i)(password|passwd|token|secret|api[_-]?key)\\s*[:=]\\s*[^<\\s][^\\s]*" (git ls-files)
+git status --short
+git diff --cached
+```
