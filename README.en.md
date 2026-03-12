@@ -2,143 +2,49 @@
 
 [中文说明](README.md)
 
-A practical skill for read-only Linux mining-incident triage and evidence-based reconstruction.
+A read-only Linux mining-incident troubleshooting skill focused on scene reconstruction and traceable reporting.
 
-This skill is built for production environments where you need useful conclusions without disrupting running business workloads.
+This repository is a **skill package**, not a manual CLI playbook. In normal usage, the model invokes the skill and the skill orchestrates scripts internally.
 
-## What This Skill Does
+## Positioning
 
-- Investigates local or remote Linux hosts.
-- Supports CPU, GPU, and mixed mining scenarios.
-- Covers process/network/service/startup/persistence/container/cloud signals.
-- Handles distro differences and degrades to fallback commands when tools are missing.
-- Continues investigation when primary logs are deleted by using surviving evidence.
-- Exports a structured case bundle with layered reports and traceable artifacts.
-- Builds a hypothesis-to-evidence matrix with confidence levels.
-- Produces operator briefs for non-security readers.
+- Minimum disruption: read-only first.
+- Evidence first: collect before concluding.
+- Confidence-gated output: observed fact / inference / attribution.
+- Approval-gated changes: no state change without explicit approval.
 
-## What This Skill Does Not Do
+## Typical Use Cases
 
-- No automatic kill/stop/delete/modify actions.
-- No over-claiming when evidence is incomplete.
-- No direct "high CPU/GPU = compromise" assumption.
+- Suspicious CPU/GPU load with possible mining activity.
+- Suspected disguised miner process/service/startup path.
+- Business host triage requiring low-impact and high traceability.
+- Missing/deleted logs where fallback evidence is required.
 
-## Installation
+## How To Use (Skill Invocation)
 
-### Install from this repository
+Call the skill in natural language. No need to run workflow scripts manually:
 
-```bash
-node scripts/install-skill.mjs install --target agents --force
-```
+- `$mining-host-troubleshooter Investigate <HOST_IP>, account <REMOTE_USER>, password <PASSWORD>, focus on GPU mining`
+- `$mining-host-troubleshooter Run local read-only triage and export Chinese + English reports`
+- `$mining-host-troubleshooter Compare this case against previous cases and rate confidence`
 
-Other targets:
+You can add control constraints directly in plain language:
 
-```bash
-node scripts/install-skill.mjs install --target codex --force
-node scripts/install-skill.mjs install --target cc-switch --force
-```
+- "Read-only only. No changes."
+- "If any kill/stop/delete is needed, explain impact/rollback first and wait for approval."
+- "Keep traceable IPs visible in internal reports."
 
-Custom destination:
+## Internal Investigation Flow
 
-```bash
-node scripts/install-skill.mjs install --dest /path/to/skills --name mining-host-troubleshooter --force
-```
-
-Print default targets:
-
-```bash
-node scripts/install-skill.mjs print-targets
-```
-
-### Install via npx
-
-After publishing to npm (or a private registry):
-
-```bash
-npx mining-host-troubleshooter-skill install --target agents
-```
-
-## Quick Start
-
-All `<...>` values are placeholders.
-
-### 1) Remote host with SSH key
-
-```bash
-python scripts/run_readonly_workflow.py \
-  --remote <REMOTE_USER>@<HOST_IP> \
-  --host-key-fingerprint "<SHA256_HOST_KEY_FINGERPRINT>" \
-  --identity <SSH_KEY_PATH> \
-  --analyst <ANALYST> \
-  --host-ip <HOST_IP> \
-  --os-hint "<OS_HINT>" \
-  --mining-mode auto \
-  --profile enterprise-self-audit \
-  --expected-workload "<EXPECTED_HIGH_COMPUTE_WORKLOAD_OR_EMPTY>" \
-  --strict-report
-```
-
-### 2) Remote host with password auth
-
-```bash
-python scripts/run_readonly_workflow.py \
-  --remote <REMOTE_USER>@<HOST_IP> \
-  --host-key-fingerprint "<SHA256_HOST_KEY_FINGERPRINT>" \
-  --password-env <SSH_PASSWORD_ENV> \
-  --analyst <ANALYST> \
-  --host-ip <HOST_IP> \
-  --os-hint "<OS_HINT>" \
-  --mining-mode auto \
-  --profile enterprise-self-audit \
-  --expected-workload "<EXPECTED_HIGH_COMPUTE_WORKLOAD_OR_EMPTY>" \
-  --strict-report
-```
-
-### 3) Remote quick-connect (IP + username + password)
-
-```bash
-export SSH_PASSWORD='<PASSWORD>'
-python scripts/run_readonly_workflow.py \
-  --remote-user <REMOTE_USER> \
-  --remote-ip <HOST_IP> \
-  --port <SSH_PORT> \
-  --password-env SSH_PASSWORD \
-  --trust-on-first-use \
-  --analyst <ANALYST> \
-  --host-ip <HOST_IP> \
-  --os-hint "<OS_HINT>" \
-  --mining-mode auto \
-  --profile enterprise-self-audit \
-  --strict-report
-```
-
-Note: `--trust-on-first-use` is for first-seen internal urgent triage. Prefer pinned fingerprint verification for high-risk targets.
-
-### 4) Natural-language control
-
-```bash
-python scripts/nl_control.py \
-  --request "Investigate <HOST_IP>, username <REMOTE_USER>, password <PASSWORD>, port <SSH_PORT>, focus on gpu mining" \
-  --analyst <ANALYST>
-```
-
-### 5) Local host
-
-```bash
-python scripts/run_readonly_workflow.py \
-  --analyst <ANALYST> \
-  --host-name <HOST_NAME> \
-  --host-ip <HOST_IP> \
-  --os-hint "<OS_HINT>" \
-  --mining-mode auto \
-  --profile enterprise-self-audit \
-  --expected-workload "<EXPECTED_HIGH_COMPUTE_WORKLOAD_OR_EMPTY>" \
-  --strict-report
-```
+1. **Trust Bootstrap**: verify target identity and SSH trust chain.
+2. **Readonly Sweep**: low-impact collection with timeout and fallback paths.
+3. **Deep Correlation**: correlate process/network/persistence/container/cloud/GPU evidence.
+4. **Confidence-Gated Conclusion**: output confirmed vs inconclusive without fabrication.
+5. **Approval-Gated Response**: provide response plan only; no automatic mutation.
 
 ## Output Layout
 
-By default, outputs are written to `reports/` under your current working directory:
+By default, case bundles are created under the current working directory:
 
 ```text
 reports/
@@ -166,48 +72,86 @@ Recommended reading order:
 2. `reports/management-summary.md` or `reports/soc-summary.md`
 3. `report.md`
 
-## Investigation Order
+## Project Structure And File Responsibilities
 
-1. Confirm host identity and access boundary.
-2. Verify SSH trust assumptions.
-3. Run low-impact read-only collection.
-4. Correlate process/network/persistence/container/cloud evidence.
-5. Normalize timeline and preserve uncertainty.
-6. Export layered reports.
-7. Discuss response actions only after explicit approval.
-
-## When Logs Are Deleted
-
-The workflow can still use read-only surviving evidence:
-
-- `wtmp`, `btmp`, `lastlog`
-- system logger/runtime config state
-- service/timer/cron/startup metadata
-- shell/tool traces
-- `/proc/*/exe (deleted)` and runtime socket/process views
-
-## Baseline And Cross-Case Comparison
-
-- Same-host baseline is for same-host history only.
-- A small baseline is weak context, not proof of benign state.
-
-Generate same-host baseline:
-
-```bash
-python scripts/generate_host_baseline.py \
-  --reports-root reports \
-  --host-ip <HOST_IP>
+```text
+.
+|-- SKILL.md
+|-- README.md
+|-- README.en.md
+|-- package.json
+|-- agents/
+|   `-- openai.yaml
+|-- references/
+|   |-- diagnostic-playbook.md
+|   |-- command-trust-verification.md
+|   |-- log-loss-fallbacks.md
+|   |-- os-compatibility.md
+|   `-- skill-maintenance.md
+|-- scripts/
+|   |-- run_readonly_workflow.py
+|   |-- collect_live_evidence.py
+|   |-- enrich_case_evidence.py
+|   |-- export_investigation_report.py
+|   |-- nl_control.py
+|   |-- generate_operator_brief.py
+|   |-- compare_case_bundles.py
+|   |-- generate_host_baseline.py
+|   |-- apply_host_baseline.py
+|   |-- validate_case_bundle.py
+|   |-- command_guard.py
+|   `-- install-skill.mjs
+`-- reports/
+    `-- .gitkeep
 ```
 
-Compare case bundles:
+Key files:
+
+- `SKILL.md`: runtime contract and hard safety rules.
+- `agents/openai.yaml`: skill metadata and runtime binding.
+- `scripts/run_readonly_workflow.py`: orchestrates end-to-end workflow.
+- `scripts/collect_live_evidence.py`: read-only collection engine with fallback probes.
+- `scripts/enrich_case_evidence.py`: evidence correlation and timeline reconstruction.
+- `scripts/export_investigation_report.py`: layered EN/ZH report export.
+- `scripts/nl_control.py`: natural-language request parser.
+- `scripts/generate_operator_brief.py`: novice-friendly operator summary.
+- `scripts/command_guard.py`: dangerous-command gating.
+- `references/`: playbooks, compatibility notes, fallback rules, maintenance guide.
+
+## Installation
+
+Install into Agents:
 
 ```bash
-python scripts/compare_case_bundles.py \
-  --base-case reports/<older-case> \
-  --target-case reports/<newer-case>
+node scripts/install-skill.mjs install --target agents --force
 ```
 
-## Safety Boundaries
+Other targets:
+
+```bash
+node scripts/install-skill.mjs install --target codex --force
+node scripts/install-skill.mjs install --target cc-switch --force
+```
+
+Custom path:
+
+```bash
+node scripts/install-skill.mjs install --dest /path/to/skills --name mining-host-troubleshooter --force
+```
+
+Show target paths:
+
+```bash
+node scripts/install-skill.mjs print-targets
+```
+
+After publishing to npm/private registry:
+
+```bash
+npx mining-host-troubleshooter-skill install --target agents
+```
+
+## Safety Boundary
 
 These actions must always be explicitly approved first:
 
@@ -215,11 +159,8 @@ These actions must always be explicitly approved first:
 - stop service
 - delete/move files
 - modify startup/config
-- reboot or interrupt production workload
+- reboot or interrupt business workloads
 
-## Project Map
+## Maintainer Notes
 
-- `SKILL.md`: runtime operating contract
-- `references/`: playbooks and fallback guidance
-- `scripts/`: executable workflow and helper tools
-- `references/skill-maintenance.md`: maintainer release/validation process
+Release/validation details are documented in `references/skill-maintenance.md`.

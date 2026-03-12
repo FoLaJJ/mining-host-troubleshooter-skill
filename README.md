@@ -4,146 +4,47 @@
 
 用于 Linux 主机疑似挖矿入侵的只读排查与溯源技能。
 
-这套技能的定位很明确：
+这个仓库是一个 **skill**，不是给用户手工拼脚本参数的命令集合。正常使用方式是让大模型调用 skill，skill 再自动编排脚本执行与报告导出。
 
-- 先保现场，再做判断
-- 默认只读，不自动处置
-- 证据优先，结论分级
-- 支持业务主机低扰动排查
+## 核心定位
 
-## 这个技能能做什么
+- 最小破坏：默认只读，优先保现场。
+- 证据驱动：先采集证据，再输出结论。
+- 结论分级：区分观测事实、推断、归因，并给出置信度。
+- 审批门禁：任何状态变更操作必须先得到明确确认。
 
-- 本机或远程主机排查（SSH 私钥、SSH agent、账号密码、跳板机）。
-- CPU / GPU / 混合挖矿场景检查。
-- 异常进程、伪装服务、持久化项、容器与云侧线索联动检查。
-- 兼容常见 Linux 发行版差异，命令缺失时自动降级到替代路径。
-- 日志缺失时使用替代证据继续还原现场（`wtmp`、`btmp`、`lastlog`、`/proc` 等）。
-- 输出结构化案件包（证据、产物、时间线、结论、摘要报告）。
-- 输出“假设-证据矩阵”，明确支撑证据、反证与置信度。
-- 生成面向非安全同学的简报（operator brief）。
+## 适用场景
 
-## 这个技能不做什么
+- Linux 主机出现异常 CPU/GPU 占用，怀疑挖矿或伪装挖矿。
+- 可疑服务、启动项、计划任务、容器行为需要追根溯源。
+- 业务主机需要低扰动、可追溯的只读排查流程。
+- 日志缺失或被清理，需要通过残留证据尽量还原现场。
 
-- 不自动 kill 进程、停服务、删文件、改配置。
-- 不在证据不足时给强结论。
-- 不把“高 CPU / 高 GPU”直接等同于入侵。
+## 如何使用（面向 skill 调用）
 
-## 安装
+直接在对话中调用 skill，不需要手工运行脚本：
 
-### 从当前仓库安装
+- `$mining-host-troubleshooter 排查 <HOST_IP>，账号 <REMOTE_USER>，密码 <PASSWORD>，重点看 GPU 挖矿`
+- `$mining-host-troubleshooter 本机疑似挖矿，先做只读排查并导出中文报告`
+- `$mining-host-troubleshooter 对这台机器做跨案件差异比对，并输出结论置信度`
 
-```bash
-node scripts/install-skill.mjs install --target agents --force
-```
+你可以继续用自然语言追加控制条件，例如：
 
-可选目标：
+- “先不要执行任何变更操作，只做只读取证。”
+- “如果要 kill/stop/delete，先告诉我影响和回滚方案，再等我确认。”
+- “报告里保留可溯源 IP，不要隐藏。”
 
-```bash
-node scripts/install-skill.mjs install --target codex --force
-node scripts/install-skill.mjs install --target cc-switch --force
-```
+## 技能内部排查流程
 
-自定义目录：
+1. **Trust Bootstrap**：确认目标身份、校验 SSH 信任链（`known_hosts`/指纹）。
+2. **Readonly Sweep**：执行低影响只读采集，带超时、检查点、降级兜底。
+3. **Deep Evidence Correlation**：关联进程、网络、持久化、容器、云线索、GPU 进程映射。
+4. **Confidence-Gated Conclusion**：按证据完整度输出 `confirmed` 或 `inconclusive`，禁止杜撰。
+5. **Approval-Gated Response**：仅输出处置建议，变更操作必须显式审批。
 
-```bash
-node scripts/install-skill.mjs install --dest /path/to/skills --name mining-host-troubleshooter --force
-```
+## 输出结果
 
-查看默认安装路径：
-
-```bash
-node scripts/install-skill.mjs print-targets
-```
-
-### 通过 npx 安装
-
-发布到 npm（或私有 registry）后可用：
-
-```bash
-npx mining-host-troubleshooter-skill install --target agents
-```
-
-## 快速开始
-
-下面示例里的 `<...>` 都是占位符。
-
-### 1) 远程主机（SSH 私钥）
-
-```bash
-python scripts/run_readonly_workflow.py \
-  --remote <REMOTE_USER>@<HOST_IP> \
-  --host-key-fingerprint "<SHA256_HOST_KEY_FINGERPRINT>" \
-  --identity <SSH_KEY_PATH> \
-  --analyst <ANALYST> \
-  --host-ip <HOST_IP> \
-  --os-hint "<OS_HINT>" \
-  --mining-mode auto \
-  --profile enterprise-self-audit \
-  --expected-workload "<合法高算力业务说明或留空>" \
-  --strict-report
-```
-
-### 2) 远程主机（账号密码）
-
-```bash
-python scripts/run_readonly_workflow.py \
-  --remote <REMOTE_USER>@<HOST_IP> \
-  --host-key-fingerprint "<SHA256_HOST_KEY_FINGERPRINT>" \
-  --password-env <SSH_PASSWORD_ENV> \
-  --analyst <ANALYST> \
-  --host-ip <HOST_IP> \
-  --os-hint "<OS_HINT>" \
-  --mining-mode auto \
-  --profile enterprise-self-audit \
-  --expected-workload "<合法高算力业务说明或留空>" \
-  --strict-report
-```
-
-### 3) 远程快速直连（IP + 账号 + 密码）
-
-```bash
-export SSH_PASSWORD='<PASSWORD>'
-python scripts/run_readonly_workflow.py \
-  --remote-user <REMOTE_USER> \
-  --remote-ip <HOST_IP> \
-  --port <SSH_PORT> \
-  --password-env SSH_PASSWORD \
-  --trust-on-first-use \
-  --analyst <ANALYST> \
-  --host-ip <HOST_IP> \
-  --os-hint "<OS_HINT>" \
-  --mining-mode auto \
-  --profile enterprise-self-audit \
-  --strict-report
-```
-
-说明：`--trust-on-first-use` 仅适合首次、内部、紧急排查。高风险目标仍建议指纹强校验。
-
-### 4) 自然语言入口
-
-```bash
-python scripts/nl_control.py \
-  --request "排查 <HOST_IP>，用户名 <REMOTE_USER>，密码 <PASSWORD>，端口 <SSH_PORT>，重点看 gpu 挖矿" \
-  --analyst <ANALYST>
-```
-
-### 5) 本机排查
-
-```bash
-python scripts/run_readonly_workflow.py \
-  --analyst <ANALYST> \
-  --host-name <HOST_NAME> \
-  --host-ip <HOST_IP> \
-  --os-hint "<OS_HINT>" \
-  --mining-mode auto \
-  --profile enterprise-self-audit \
-  --expected-workload "<合法高算力业务说明或留空>" \
-  --strict-report
-```
-
-## 报告与目录结构
-
-默认输出到当前工作目录下的 `reports/`：
+默认在当前工作目录生成案件包：
 
 ```text
 reports/
@@ -165,55 +66,94 @@ reports/
         `-- operator-brief.json
 ```
 
-推荐阅读顺序：
+建议阅读顺序：
 
 1. `reports/index.zh-CN.md`
 2. `reports/management-summary.zh-CN.md` 或 `reports/soc-summary.zh-CN.md`
 3. `report.zh-CN.md`
 
-## 现场排查顺序（默认流程）
+## 项目结构与文件职责
 
-1. 确认目标主机身份与权限边界。
-2. 校验 SSH 信任链（`known_hosts` 或指纹）。
-3. 执行低影响只读采集。
-4. 关联进程、网络、持久化、启动面和容器/云线索。
-5. 重建时间线并标记不确定性。
-6. 生成分层报告与证据索引。
-7. 仅在审批后再讨论处置动作。
-
-## 日志被删了还能查什么
-
-即便 `auth.log` / `secure` / `syslog` 被清理，流程仍会继续检查：
-
-- 登录数据库：`wtmp`、`btmp`、`lastlog`
-- 服务与启动面：`systemd`、`timer`、`cron`、`authorized_keys`、`/etc/ld.so.preload`
-- shell 与工具痕迹：`.wget-hsts`、`.lesshst`、`.viminfo`、`.python_history`
-- 运行时残留：`/proc/*/exe (deleted)`、当前监听端口与连接
-
-## 基线与跨案件比对
-
-- 同机基线只用于同一台主机历史比对，不能当跨机器“清白证明”。
-- 样本过少的基线只能作为弱参考，不能单独下结论。
-
-生成同机基线：
-
-```bash
-python scripts/generate_host_baseline.py \
-  --reports-root reports \
-  --host-ip <HOST_IP>
+```text
+.
+|-- SKILL.md
+|-- README.md
+|-- README.en.md
+|-- package.json
+|-- agents/
+|   `-- openai.yaml
+|-- references/
+|   |-- diagnostic-playbook.md
+|   |-- command-trust-verification.md
+|   |-- log-loss-fallbacks.md
+|   |-- os-compatibility.md
+|   `-- skill-maintenance.md
+|-- scripts/
+|   |-- run_readonly_workflow.py
+|   |-- collect_live_evidence.py
+|   |-- enrich_case_evidence.py
+|   |-- export_investigation_report.py
+|   |-- nl_control.py
+|   |-- generate_operator_brief.py
+|   |-- compare_case_bundles.py
+|   |-- generate_host_baseline.py
+|   |-- apply_host_baseline.py
+|   |-- validate_case_bundle.py
+|   |-- command_guard.py
+|   `-- install-skill.mjs
+`-- reports/
+    `-- .gitkeep
 ```
 
-跨案件比对：
+关键文件说明：
+
+- `SKILL.md`：运行时契约，定义边界、流程、门禁与报告标准。
+- `agents/openai.yaml`：技能入口元数据与绑定配置。
+- `scripts/run_readonly_workflow.py`：主编排器，串起采集、富化、校验、导出。
+- `scripts/collect_live_evidence.py`：多路径只读采集（本地/远程、命令降级、超时控制）。
+- `scripts/enrich_case_evidence.py`：证据关联、时间线重建、假设矩阵生成。
+- `scripts/export_investigation_report.py`：导出中英文主报告与分层摘要。
+- `scripts/nl_control.py`：自然语言请求解析与参数映射。
+- `scripts/generate_operator_brief.py`：面向非安全同学的简报生成。
+- `scripts/command_guard.py`：危险命令门禁与审批约束。
+- `references/`：排查手册、降级策略、兼容性与维护规范。
+
+## 安装
+
+安装到 Agents：
 
 ```bash
-python scripts/compare_case_bundles.py \
-  --base-case reports/<older-case> \
-  --target-case reports/<newer-case>
+node scripts/install-skill.mjs install --target agents --force
+```
+
+安装到其它目标：
+
+```bash
+node scripts/install-skill.mjs install --target codex --force
+node scripts/install-skill.mjs install --target cc-switch --force
+```
+
+自定义安装目录：
+
+```bash
+node scripts/install-skill.mjs install --dest /path/to/skills --name mining-host-troubleshooter --force
+```
+
+查看默认目标路径：
+
+```bash
+node scripts/install-skill.mjs print-targets
+```
+
+发布到 npm（或私有 registry）后，也可通过：
+
+```bash
+npx mining-host-troubleshooter-skill install --target agents
 ```
 
 ## 安全边界
 
-下列动作必须人工确认后才允许执行：
+下列操作必须人工确认后才允许执行：
 
 - 杀进程
 - 停服务
@@ -221,9 +161,6 @@ python scripts/compare_case_bundles.py \
 - 修改配置或启动项
 - 重启或中断业务
 
-## 文档导航
+## 维护说明
 
-- `SKILL.md`：运行时核心契约。
-- `references/`：详细排查手册与降级说明。
-- `scripts/`：执行脚本与工具。
-- `references/skill-maintenance.md`：维护者发布与校验流程。
+维护者流程、校验与发布规范见：`references/skill-maintenance.md`。
