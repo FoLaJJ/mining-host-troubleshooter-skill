@@ -47,8 +47,10 @@
 - 自动提取高 CPU 进程并映射到对应可执行程序（PID -> exe -> cmdline）。
 - 自动解析矿工类命令参数：`algorithm`、`pool`、`proxy`、`wallet`、`password`、`cpu-threads`。
 - 自动提取 systemd `ExecStart`、cron/crontab 调度中的可疑运行命令画像。
+- GPU 侧采用多路径只读探测，不依赖单一 `nvidia-smi`，会结合 `lspci`、`lshw`、`/dev/dri`、`/sys/class/drm`、`/proc/driver/nvidia`、`rocm-smi` 等线索。
 - 自动识别命令不可用/降级标记，并在报告中显式给出可见性边界。
 - 报告前部优先展示“运行参数画像”与高信号结论，减少人工翻全文成本。
+- 领导复核报告前部强制给出“观测事实 / 推断 / 归因”结论矩阵，并标注置信度。
 
 ## 输出结果
 

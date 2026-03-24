@@ -492,6 +492,7 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
     gpu_utilization_samples: list[dict[str, Any]] = []
     gpu_compute_processes: list[dict[str, str]] = []
     gpu_suspicious_processes: list[dict[str, str]] = []
+    gpu_fallback_markers: list[str] = []
     host_reported_timezone = "unknown"
     host_ntp_synchronized = "unknown"
     privilege_user = "unknown"
@@ -626,18 +627,33 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
                     stripped = line.strip()
                     if not stripped:
                         continue
+                    if (
+                        stripped.endswith("_missing")
+                        or stripped.endswith("_unavailable")
+                        or stripped in {"not found", "command not found"}
+                    ):
+                        if stripped not in gpu_fallback_markers and len(gpu_fallback_markers) < 20:
+                            gpu_fallback_markers.append(stripped)
                     if len(gpu_adapter_lines) < 24 and (
                         stripped.lower().startswith("gpu ")
                         or "nvidia" in stripped.lower()
                         or "amd" in stripped.lower()
                         or "radeon" in stripped.lower()
+                        or "amdgpu" in stripped.lower()
+                        or "nouveau" in stripped.lower()
+                        or "display controller" in stripped.lower()
+                        or "vga compatible controller" in stripped.lower()
+                        or "/dev/dri" in stripped.lower()
+                        or "/sys/class/drm/" in stripped.lower()
                     ):
                         gpu_adapter_lines.append(stripped)
                     lower = stripped.lower()
                     if "nvidia" in lower:
                         gpu_vendor_hints.add("nvidia")
-                    if "amd" in lower or "radeon" in lower:
+                    if "amd" in lower or "radeon" in lower or "amdgpu" in lower:
                         gpu_vendor_hints.add("amd")
+                    if "nouveau" in lower:
+                        gpu_vendor_hints.add("nouveau")
 
                     mq = GPU_QUERY_LINE_RE.match(stripped)
                     if mq:
@@ -1074,6 +1090,22 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
 
     gpu_utils = [safe for safe in [parse_int_from_text(str(x.get("utilization", ""))) for x in gpu_utilization_samples] if safe is not None]
     gpu_peak_util = max(gpu_utils) if gpu_utils else 0
+    if gpu_suspicious_processes:
+        gpu_visibility_status = "suspicious_runtime"
+    elif gpu_compute_processes or gpu_peak_util > 0:
+        gpu_visibility_status = "active_no_direct_miner_match"
+    elif gpu_adapter_lines or gpu_vendor_hints:
+        gpu_visibility_status = "hardware_visible_no_runtime"
+    elif gpu_fallback_markers:
+        gpu_visibility_status = "tooling_limited"
+    else:
+        gpu_visibility_status = "not_observed"
+    gpu_visibility_summary = (
+        f"status={gpu_visibility_status}, vendors={','.join(sorted(gpu_vendor_hints)) or 'none'}, "
+        f"adapter_lines={len(gpu_adapter_lines)}, compute_processes={len(gpu_compute_processes)}, "
+        f"suspicious_processes={len(gpu_suspicious_processes)}, peak_utilization={gpu_peak_util}%, "
+        f"fallback_markers={','.join(gpu_fallback_markers[:6]) or 'none'}"
+    )
     has_network_ioc = bool(network_ioc_hits)
     has_process_ioc = bool(ioc_process_lines)
     has_runtime_profile = bool(runtime_profiles)
@@ -1275,6 +1307,9 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
         "gpu_suspicious_process_count": len(gpu_suspicious_processes),
         "gpu_suspicious_process_samples": gpu_suspicious_processes[:10],
         "gpu_probe_ids": sorted(gpu_probe_ids),
+        "gpu_fallback_markers": gpu_fallback_markers[:20],
+        "gpu_visibility_status": gpu_visibility_status,
+        "gpu_visibility_summary": gpu_visibility_summary,
         "command_fallback_marker_count": len(fallback_markers),
         "command_fallback_markers": fallback_markers[:20],
         "runtime_profile_count": len(runtime_profiles),

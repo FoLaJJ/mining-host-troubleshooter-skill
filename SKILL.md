@@ -200,6 +200,7 @@ Every final output should include:
 9. Claim type (`observed_fact` / `inference` / `attribution`) and confidence reason for each key conclusion.
 10. False-positive control note when high compute might be legitimate.
 11. A standalone leadership report in both languages that can be read without evidence jumps and that covers suspected ingress path, earliest relevant time, post-access activity, mining or malware details, system state, service exposure, lateral-movement assessment, evidence excerpts, and novice-friendly response steps.
+12. If GPU review is requested or the host may have accelerators, use multi-path read-only GPU visibility checks instead of relying on a single vendor tool, and state visibility limits explicitly in the report.
 
 When exporting files, use the case-bundle layout under `reports/<case>/` and prefer the bundled report exporter.
 

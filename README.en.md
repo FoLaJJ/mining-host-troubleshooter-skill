@@ -47,8 +47,10 @@ You can add control constraints directly in plain language:
 - Maps top-CPU processes to executable paths and command lines (PID -> exe -> cmdline).
 - Extracts miner runtime fields automatically: `algorithm`, `pool`, `proxy`, `wallet`, `password`, `cpu-threads`.
 - Parses suspicious runtime commands from systemd `ExecStart` and cron/crontab entries.
+- Uses multi-path read-only GPU probing instead of relying on `nvidia-smi` alone, combining `lspci`, `lshw`, `/dev/dri`, `/sys/class/drm`, `/proc/driver/nvidia`, `rocm-smi`, and related surfaces when present.
 - Captures command-missing/fallback markers and makes visibility limits explicit in reports.
 - Surfaces runtime profile highlights at the beginning of reports to reduce manual triage time.
+- Forces a leadership-facing conclusion matrix near the top of the standalone report, split into observed fact / inference / attribution with confidence labels.
 
 ## Output Layout
 

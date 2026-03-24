@@ -285,6 +285,9 @@ def localize_auto_text_zh_cn(text: str) -> str:
         "No direct miner IOC was observed in this collection. Current results are limited to review surfaces that still require analyst confirmation.": "本次采集中未观察到直接的挖矿 IOC，当前结果主要是需要人工复核的访问面与环境侧线索。",
         "This does not clear the host. The present output supports review-driven triage, not a confirmed mining-compromise conclusion.": "这并不能证明主机安全无虞。当前输出仅支持复核驱动的分诊，不足以下结论为已确认的挖矿入侵。",
         "Absence of indicators in this pass is not proof of absence; visibility, timing, and privilege may still be incomplete.": "本轮未见指标并不等于不存在问题；当前可见性、采集时机和权限范围仍可能不完整。",
+        "Prioritize runtime lineage, parent-child process review, wallet/pool traces, and persistence pivots.": "优先复核运行链路、父子进程关系、钱包或矿池痕迹，以及持久化支点。",
+        "Prioritize surviving access traces, service startup context, container/cloud exposure, and deleted-log fallback artifacts.": "优先复核现存访问痕迹、服务启动上下文、容器或云侧暴露面，以及日志缺失后的替代证据。",
+        "Expand time window, privilege visibility, and external telemetry correlation before closing the case.": "在结案前应继续扩展时间窗口、权限可见性，并补做外部遥测关联。",
         "yes": "是",
         "no": "否",
         "True": "是",
@@ -1199,6 +1202,23 @@ def infer_file_role(item: dict[str, Any]) -> str:
     return str(item.get("role_guess", "")).strip() or "unknown"
 
 
+def claim_type_emoji(value: str) -> str:
+    return {
+        "observed_fact": "🔎",
+        "inference": "🧠",
+        "attribution": "🎯",
+    }.get(normalize_claim_type(value), "🔎")
+
+
+def confidence_emoji(value: str) -> str:
+    return {
+        "high": "🟢",
+        "medium": "🟡",
+        "low": "🟠",
+        "unknown": "⚪",
+    }.get(str(value).strip().lower(), "⚪")
+
+
 def leadership_payload(ctx: dict[str, Any]) -> dict[str, Any]:
     scene = ctx["scene_reconstruction"]
     timeline = sort_timeline_entries([as_dict(x) for x in as_list(ctx["timeline"])])
@@ -1326,14 +1346,132 @@ def leadership_payload(ctx: dict[str, Any]) -> dict[str, Any]:
         "evidence_excerpt_ids": evidence_ids,
         "gpu_peak": safe_int(scene.get("gpu_peak_utilization_percent", 0)),
         "gpu_suspicious": safe_int(scene.get("gpu_suspicious_process_count", 0)),
+        "gpu_visibility_status": str(scene.get("gpu_visibility_status", "unknown")),
+        "gpu_visibility_summary": str(scene.get("gpu_visibility_summary", "unknown")),
+        "gpu_vendor_hints": [str(x) for x in as_list(scene.get("gpu_vendor_hints"))[:6]],
+        "gpu_fallback_markers": [str(x) for x in as_list(scene.get("gpu_fallback_markers"))[:8]],
         "runtime_profile_count": safe_int(scene.get("runtime_profile_count", 0)),
         "top_cpu_keyword_hits": safe_int(scene.get("top_cpu_process_keyword_hit_count", 0)),
     }
 
 
+def leadership_matrix_rows(ctx: dict[str, Any], payload: dict[str, Any]) -> list[dict[str, str]]:
+    posture = investigation_posture_payload(ctx)
+    trace_counts = ctx["trace_counts"]
+    gpu_status_zh = {
+        "suspicious_runtime": "已见可疑运行时",
+        "active_no_direct_miner_match": "存在活动但未直接命中矿工",
+        "hardware_visible_no_runtime": "硬件可见但未见运行时",
+        "tooling_limited": "工具受限",
+        "not_observed": "未观察到",
+        "unknown": "未知",
+    }.get(payload["gpu_visibility_status"], payload["gpu_visibility_status"])
+    gpu_summary_zh = (
+        f"status={gpu_status_zh}，vendors={'、'.join(payload['gpu_vendor_hints']) or '无'}，"
+        f"adapter_lines={len(as_list(ctx['scene_reconstruction'].get('gpu_adapter_samples')))}，"
+        f"compute_processes={ctx['scene_reconstruction'].get('gpu_compute_process_count', 0)}，"
+        f"suspicious_processes={payload['gpu_suspicious']}，peak_utilization={payload['gpu_peak']}%，"
+        f"fallback_markers={'、'.join(payload['gpu_fallback_markers']) or '无'}"
+    )
+    rows: list[dict[str, str]] = []
+    if payload["runtime_profile_count"] or posture["process_hits"] or posture["network_hits"] or posture["gpu_hits"]:
+        rows.append(
+            {
+                "claim_type": "observed_fact",
+                "confidence": "medium" if payload["runtime_profile_count"] or posture["gpu_hits"] else "low",
+                "statement": "Runtime-facing indicators were recovered during collection.",
+                "statement_zh": "本轮采集中已恢复出运行时侧指标。",
+                "basis": (
+                    f"runtime_profiles={payload['runtime_profile_count']}, process_ioc_hits={posture['process_hits']}, "
+                    f"network_ioc_hits={posture['network_hits']}, gpu_suspicious={payload['gpu_suspicious']}"
+                ),
+                "basis_zh": (
+                    f"runtime_profiles={payload['runtime_profile_count']}，process_ioc_hits={posture['process_hits']}，"
+                    f"network_ioc_hits={posture['network_hits']}，gpu_suspicious={payload['gpu_suspicious']}"
+                ),
+            }
+        )
+    else:
+        rows.append(
+            {
+                "claim_type": "observed_fact",
+                "confidence": "low",
+                "statement": "No direct miner runtime IOC was recovered in this pass.",
+                "statement_zh": "本轮未恢复出直接的矿工运行时 IOC。",
+                "basis": (
+                    f"runtime_profiles={payload['runtime_profile_count']}, process_ioc_hits={posture['process_hits']}, "
+                    f"network_ioc_hits={posture['network_hits']}, gpu_suspicious={payload['gpu_suspicious']}"
+                ),
+                "basis_zh": (
+                    f"runtime_profiles={payload['runtime_profile_count']}，process_ioc_hits={posture['process_hits']}，"
+                    f"network_ioc_hits={posture['network_hits']}，gpu_suspicious={payload['gpu_suspicious']}"
+                ),
+            }
+        )
+    rows.append(
+        {
+            "claim_type": "observed_fact",
+            "confidence": "medium" if payload["gpu_suspicious"] else "low",
+            "statement": "GPU visibility was evaluated through multiple read-only probe paths.",
+            "statement_zh": "GPU 已通过多条只读探针路径进行可见性评估。",
+            "basis": payload["gpu_visibility_summary"],
+            "basis_zh": gpu_summary_zh,
+        }
+    )
+    if payload["ingress_hypotheses"]:
+        first = payload["ingress_hypotheses"][0]
+        rows.append(
+            {
+                "claim_type": "inference",
+                "confidence": str(first.get("confidence", "low")),
+                "statement": str(first.get("label", "Initial-access path remains inconclusive.")),
+                "statement_zh": str(first.get("label_zh", "当前入侵入口仍待进一步确认。")),
+                "basis": str(first.get("basis", "-")),
+                "basis_zh": str(first.get("basis", "-")),
+            }
+        )
+    rows.append(
+        {
+            "claim_type": "inference",
+            "confidence": "medium" if payload["lateral_status"] == "possible" else "low",
+            "statement": (
+                "Lateral movement remains possible and needs broader pivot review."
+                if payload["lateral_status"] == "possible"
+                else "No direct host-side lateral movement indicator was observed in current visibility."
+            ),
+            "statement_zh": (
+                "横向移动仍存在可能，需要继续扩展支点复核。"
+                if payload["lateral_status"] == "possible"
+                else "当前可见性范围内，未直接观察到主机侧横向移动指标。"
+            ),
+            "basis": payload["lateral_basis"],
+            "basis_zh": localize_auto_text_zh_cn(payload["lateral_basis"]),
+        }
+    )
+    rows.append(
+        {
+            "claim_type": "attribution",
+            "confidence": "low",
+            "statement": "Current host-only evidence does not establish actor attribution.",
+            "statement_zh": "仅凭当前主机侧证据，尚不足以建立攻击者归因。",
+            "basis": (
+                f"traced={trace_counts.get('traced', 0)}, untraceable={trace_counts.get('untraceable', 0)}, "
+                f"unknown={trace_counts.get('unknown', 0)}, log_risk_count={payload['log_risk_count']}"
+            ),
+            "basis_zh": (
+                f"traced={trace_counts.get('traced', 0)}，untraceable={trace_counts.get('untraceable', 0)}，"
+                f"unknown={trace_counts.get('unknown', 0)}，log_risk_count={payload['log_risk_count']}"
+            ),
+        }
+    )
+    return rows
+
+
 def build_leadership_report(data: dict[str, Any], redact: bool, case_dir: str | None = None) -> str:
     ctx = prepare_report_context(data, redact=redact, strict=False, case_dir=case_dir)
     payload = leadership_payload(ctx)
+    matrix_rows = leadership_matrix_rows(ctx, payload)
+    posture = investigation_posture_payload(ctx)
 
     def maybe_redact(value: str) -> str:
         return sanitize_report_text(value, redact)
@@ -1343,17 +1481,28 @@ def build_leadership_report(data: dict[str, Any], redact: bool, case_dir: str | 
         "",
         "This standalone report is intended for management review. It is self-contained and does not require jumping across other files.",
         "",
-        "## Final Summary",
+        "## 🚨 Final Summary",
         f"- **Case ID:** `{data.get('case_id', 'unknown')}`",
         f"- **Host:** `{maybe_redact(ctx['host_name'])}` (`{maybe_redact(ctx['host_ip'])}`)",
         f"- **OS:** `{maybe_redact(ctx['os_name'])}`",
         f"- **Observation Window (UTC):** `{ctx['window_start']}` -> `{ctx['window_end']}`",
         f"- **Earliest Relevant Time:** `{maybe_redact(payload['intrusion_window'])}`",
-        f"- **Conclusion:** {maybe_redact(investigation_posture_payload(ctx)['verdict'])}",
-        f"- **Boundary:** {maybe_redact(investigation_posture_payload(ctx)['boundary'])}",
+        f"- **Conclusion:** {maybe_redact(posture['verdict'])}",
+        f"- **Boundary:** {maybe_redact(posture['boundary'])}",
+        f"- **Immediate Focus:** {maybe_redact(posture['focus'])}",
         "",
-        "## Suspected Initial Access",
+        "## 🧩 Conclusion Matrix",
     ]
+    for row in matrix_rows:
+        lines.extend(
+            [
+                f"### {claim_type_emoji(row['claim_type'])} {claim_type_label(row['claim_type'])} | {confidence_emoji(row['confidence'])} {row['confidence']}",
+                f"- **Statement:** {maybe_redact(row['statement'])}",
+                f"- **Basis:** {maybe_redact(row['basis'])}",
+                "",
+            ]
+        )
+    lines.append("## 🧭 Suspected Initial Access")
     for item in payload["ingress_hypotheses"]:
         lines.append(
             f"- `{item['confidence']}` {maybe_redact(item['label'])} | basis: {maybe_redact(item['basis'])}"
@@ -1361,7 +1510,7 @@ def build_leadership_report(data: dict[str, Any], redact: bool, case_dir: str | 
     lines.extend(
         [
             "",
-            "## What Was Observed After Access",
+            "## 🔬 What Was Observed After Access",
         ]
     )
     for item in payload["activity_summary"]:
@@ -1369,11 +1518,14 @@ def build_leadership_report(data: dict[str, Any], redact: bool, case_dir: str | 
     lines.extend(
         [
             "",
-            "## Mining / Malware Details",
+            "## ⛏️ Mining / Malware Details",
             f"- **Parsed Miner Runtime Profiles:** `{payload['runtime_profile_count']}`",
             f"- **Top-CPU Miner-Keyword Hits:** `{payload['top_cpu_keyword_hits']}`",
             f"- **GPU Suspicious Process Count:** `{payload['gpu_suspicious']}`",
             f"- **GPU Peak Utilization:** `{payload['gpu_peak']}%`",
+            f"- **GPU Visibility Status:** `{maybe_redact(payload['gpu_visibility_status'])}`",
+            f"- **GPU Vendor Hints:** `{maybe_redact(', '.join(payload['gpu_vendor_hints']) or 'none')}`",
+            f"- **GPU Fallback Markers:** `{maybe_redact(', '.join(payload['gpu_fallback_markers']) or 'none')}`",
         ]
     )
     if payload["runtime_profiles"]:
@@ -1384,7 +1536,7 @@ def build_leadership_report(data: dict[str, Any], redact: bool, case_dir: str | 
     else:
         lines.append("- No parseable miner runtime profile was recovered in this pass.")
 
-    lines.extend(["", "## Files And Hashes"])
+    lines.extend(["", "## 📦 Files And Hashes"])
     if payload["malware_files"]:
         for item in payload["malware_files"][:8]:
             lines.append(
@@ -1396,7 +1548,7 @@ def build_leadership_report(data: dict[str, Any], redact: bool, case_dir: str | 
     lines.extend(
         [
             "",
-            "## System State And Exposure",
+            "## 🖥️ System State And Exposure",
             f"- **Service Exposure:** {maybe_redact(payload['service_exposure'])}",
             f"- **Authentication Source IPs:** {maybe_redact(', '.join(payload['auth_ips']) if payload['auth_ips'] else 'none recovered')}",
             f"- **Listening Ports:** {maybe_redact(', '.join(payload['listening_ports']) if payload['listening_ports'] else 'none recovered')}",
@@ -1412,15 +1564,15 @@ def build_leadership_report(data: dict[str, Any], redact: bool, case_dir: str | 
     lines.extend(
         [
             "",
-            "## Lateral Movement Assessment",
+            "## 🔁 Lateral Movement Assessment",
             f"- **Status:** `{payload['lateral_status']}`",
             f"- **Assessment:** {maybe_redact(payload['lateral_basis'])}",
             "",
-            "## Log Integrity",
+            "## 🧾 Log Integrity",
             f"- **Risk Count:** `{payload['log_risk_count']}`",
             "- Missing or tampered logs reduce attribution confidence and require external telemetry correlation.",
             "",
-            "## Evidence Excerpts",
+            "## 🔗 Evidence Excerpts",
         ]
     )
     evid_idx = ctx["evid_idx"]
@@ -1440,7 +1592,7 @@ def build_leadership_report(data: dict[str, Any], redact: bool, case_dir: str | 
     lines.extend(
         [
             "",
-            "## Recommended Response Plan",
+            "## ✅ Recommended Response Plan",
             "1. Preserve the current host state. Do not kill processes, delete files, or restart services before approval.",
             "2. If the host is business-critical, isolate network egress through change-controlled controls rather than destructive host actions.",
             "3. Collect external evidence next: bastion/VPN/IdP logs, firewall/NAT/DNS records, cloud audit trails, and Kubernetes audit logs if applicable.",
@@ -1449,7 +1601,7 @@ def build_leadership_report(data: dict[str, Any], redact: bool, case_dir: str | 
             "6. If mining runtime is confirmed, prepare a rollback-safe containment plan covering process stop, persistence cleanup, credential hygiene, and service recovery validation.",
             "7. If lateral movement remains possible, expand review to peer hosts, bastions, management nodes, and internal source IP pivots named in this report.",
             "",
-            "## Operator Notes",
+            "## ℹ️ Operator Notes",
             "- This report separates observed facts from inference and does not fabricate missing steps.",
             "- Any state-changing action still requires explicit approval and business-impact review.",
             "",
@@ -1461,17 +1613,26 @@ def build_leadership_report(data: dict[str, Any], redact: bool, case_dir: str | 
 def build_leadership_report_zh_cn(data: dict[str, Any], redact: bool, case_dir: str | None = None) -> str:
     ctx = prepare_report_context(data, redact=redact, strict=False, case_dir=case_dir)
     payload = leadership_payload(ctx)
+    matrix_rows = leadership_matrix_rows(ctx, payload)
 
     def maybe_redact(value: str) -> str:
         return zh_report_text(value, redact)
 
     posture = investigation_posture_payload(ctx)
+    gpu_status_zh = {
+        "suspicious_runtime": "已见可疑运行时",
+        "active_no_direct_miner_match": "存在活动但未直接命中矿工",
+        "hardware_visible_no_runtime": "硬件可见但未见运行时",
+        "tooling_limited": "工具受限",
+        "not_observed": "未观察到",
+        "unknown": "未知",
+    }.get(payload["gpu_visibility_status"], payload["gpu_visibility_status"])
     lines = [
         f"# {ctx['title']} - 领导复核报告",
         "",
         "这是一份可单独提交的案件汇总件，不依赖其它文件跳转即可了解整体情况。",
         "",
-        "## 最终结论",
+        "## 🚨 最终结论",
         f"- **案件 ID：** `{data.get('case_id', 'unknown')}`",
         f"- **主机：** `{sanitize_report_text(ctx['host_name'], redact)}` (`{sanitize_report_text(ctx['host_ip'], redact)}`)",
         f"- **操作系统：** `{zh_report_text(ctx['os_name'], redact)}`",
@@ -1479,23 +1640,48 @@ def build_leadership_report_zh_cn(data: dict[str, Any], redact: bool, case_dir: 
         f"- **最早相关时间：** `{sanitize_report_text(payload['intrusion_window'], redact)}`",
         f"- **结论：** {maybe_redact(localize_auto_text_zh_cn(posture['verdict']))}",
         f"- **判断边界：** {maybe_redact(localize_auto_text_zh_cn(posture['boundary']))}",
+        f"- **当前重点：** {maybe_redact(localize_auto_text_zh_cn(posture['focus']))}",
         "",
-        "## 疑似入侵方式",
+        "## 🧩 结论矩阵",
     ]
+    for row in matrix_rows:
+        claim_zh = {
+            "observed_fact": "观测事实",
+            "inference": "推断",
+            "attribution": "归因",
+        }.get(row["claim_type"], row["claim_type"])
+        conf_zh = {
+            "high": "高",
+            "medium": "中",
+            "low": "低",
+            "unknown": "未知",
+        }.get(row["confidence"], row["confidence"])
+        lines.extend(
+            [
+                f"### {claim_type_emoji(row['claim_type'])} {claim_zh} | {confidence_emoji(row['confidence'])} {conf_zh}",
+                f"- **表述：** {maybe_redact(row['statement_zh'])}",
+                f"- **依据：** {maybe_redact(str(row.get('basis_zh', localize_auto_text_zh_cn(row['basis']))))}",
+                "",
+            ]
+        )
+    lines.append("## 🧭 疑似入侵方式")
     for item in payload["ingress_hypotheses"]:
         conf = {"high": "高", "medium": "中", "low": "低"}.get(item["confidence"], item["confidence"])
         lines.append(f"- `置信度 {conf}` {maybe_redact(item['label_zh'])} | 依据：{maybe_redact(item['basis'])}")
-    lines.extend(["", "## 入侵后做了什么"])
+    lines.extend(["", "## 🔬 入侵后做了什么"])
     for item in payload["activity_summary"]:
         lines.append(f"- {maybe_redact(localize_auto_text_zh_cn(item))}")
     lines.extend(
         [
             "",
-            "## 挖矿 / 木马信息",
+            "## ⛏️ 挖矿 / 木马信息",
             f"- **运行参数画像数量：** `{payload['runtime_profile_count']}`",
             f"- **高 CPU 进程矿工关键字命中数：** `{payload['top_cpu_keyword_hits']}`",
             f"- **GPU 可疑进程数量：** `{payload['gpu_suspicious']}`",
             f"- **GPU 峰值利用率：** `{payload['gpu_peak']}%`",
+            f"- **GPU 可见性状态：** `{maybe_redact(gpu_status_zh)}`",
+            f"- **GPU 厂商提示：** `{maybe_redact('、'.join(payload['gpu_vendor_hints']) or '无')}`",
+            f"- **GPU 降级标记：** `{maybe_redact('、'.join(payload['gpu_fallback_markers']) or '无')}`",
         ]
     )
     if payload["runtime_profiles"]:
@@ -1506,7 +1692,7 @@ def build_leadership_report_zh_cn(data: dict[str, Any], redact: bool, case_dir: 
     else:
         lines.append("- 当前未恢复出可直接解析的矿工运行参数画像。")
 
-    lines.extend(["", "## 可疑文件与哈希"])
+    lines.extend(["", "## 📦 可疑文件与哈希"])
     if payload["malware_files"]:
         for item in payload["malware_files"][:8]:
             role_label = {
@@ -1524,7 +1710,7 @@ def build_leadership_report_zh_cn(data: dict[str, Any], redact: bool, case_dir: 
     lines.extend(
         [
             "",
-            "## 系统状态与暴露面",
+            "## 🖥️ 系统状态与暴露面",
             f"- **服务暴露面：** {maybe_redact(localize_auto_text_zh_cn(payload['service_exposure']))}",
             f"- **认证来源 IP：** {sanitize_report_text(', '.join(payload['auth_ips']) if payload['auth_ips'] else '未恢复', redact)}",
             f"- **监听端口：** {sanitize_report_text(', '.join(payload['listening_ports']) if payload['listening_ports'] else '未恢复', redact)}",
@@ -1541,15 +1727,15 @@ def build_leadership_report_zh_cn(data: dict[str, Any], redact: bool, case_dir: 
     lines.extend(
         [
             "",
-            "## 横向渗透判断",
+            "## 🔁 横向渗透判断",
             f"- **状态：** `{lateral_label}`",
             f"- **说明：** {maybe_redact(localize_auto_text_zh_cn(payload['lateral_basis']))}",
             "",
-            "## 日志完整性",
+            "## 🧾 日志完整性",
             f"- **风险数量：** `{payload['log_risk_count']}`",
             "- 关键日志缺失或可疑时，攻击链归因置信度必须下调，并补拉外部遥测。",
             "",
-            "## 必要证据摘录",
+            "## 🔗 必要证据摘录",
         ]
     )
     evid_idx = ctx["evid_idx"]
@@ -1569,7 +1755,7 @@ def build_leadership_report_zh_cn(data: dict[str, Any], redact: bool, case_dir: 
     lines.extend(
         [
             "",
-            "## 处置建议（可直接给执行人员）",
+            "## ✅ 处置建议（可直接给执行人员）",
             "1. 先保现场，禁止未经审批直接杀进程、删文件、停服务或重启。",
             "2. 若主机承载业务，优先通过可回滚的网络侧手段限制异常外联，而不是直接做破坏性主机操作。",
             "3. 立即补拉外部证据：堡垒机/VPN/IdP 登录日志、边界防火墙/NAT/DNS、云审计、Kubernetes 审计。",
@@ -1578,7 +1764,7 @@ def build_leadership_report_zh_cn(data: dict[str, Any], redact: bool, case_dir: 
             "6. 若已确认存在挖矿运行体，再制定可回滚的隔离和清理方案，覆盖进程、持久化、凭据和业务恢复验证。",
             "7. 若横向渗透存在可能，继续排查本报告提到的内网来源 IP、跳板机、管理节点和同网段主机。",
             "",
-            "## 使用说明",
+            "## ℹ️ 使用说明",
             "- 本报告区分观测事实与推断，不会补写证据里不存在的步骤。",
             "- 任何状态变更操作仍需明确审批和业务影响评估。",
             "",

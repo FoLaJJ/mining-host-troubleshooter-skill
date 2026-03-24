@@ -320,6 +320,32 @@ BASE_PROBES = [
     ),
     Probe("gpu", "rocm-smi --showproductname --showuse --showtemp --showpower --showpidgpus 2>/dev/null || true"),
     Probe(
+        "gpu",
+        "if command -v lshw >/dev/null 2>&1; then lshw -C display 2>/dev/null | sed -n '1,160p'; "
+        "else echo 'lshw_missing'; fi",
+    ),
+    Probe(
+        "gpu",
+        "if command -v lsmod >/dev/null 2>&1; then lsmod | grep -Ei 'nvidia|amdgpu|radeon|nouveau' || true; "
+        "else echo 'lsmod_missing'; fi; "
+        "ls -l /dev/dri 2>/dev/null || echo 'dev_dri_missing'",
+    ),
+    Probe(
+        "gpu",
+        "if [ -d /proc/driver/nvidia/gpus ]; then "
+        "find /proc/driver/nvidia/gpus -maxdepth 2 -type f -name information "
+        "-exec sh -c 'echo \"## $1\"; sed -n \"1,80p\" \"$1\"' _ {} \\; 2>/dev/null; "
+        "else echo 'proc_driver_nvidia_missing'; fi",
+    ),
+    Probe(
+        "gpu",
+        "if [ -d /sys/class/drm ]; then "
+        "find /sys/class/drm -maxdepth 3 -type f "
+        "\\( -name vendor -o -name device -o -name uevent \\) "
+        "-exec sh -c 'echo \"## $1\"; sed -n \"1,40p\" \"$1\"' _ {} \\; 2>/dev/null | head -n 240; "
+        "else echo 'drm_sysfs_missing'; fi",
+    ),
+    Probe(
         "log_integrity",
         "for f in /var/log/auth.log /var/log/auth.log.1 /var/log/secure /var/log/syslog /var/log/messages /var/log/wtmp /var/log/btmp /var/log/lastlog; do "
         "if [ -L \"$f\" ]; then echo \"$f|symlink|$(readlink \"$f\")\"; "
