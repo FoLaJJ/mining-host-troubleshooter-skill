@@ -365,6 +365,17 @@ DEEP_READONLY_PROBES = [
         "[ -n \"$cmd\" ] && echo \"$pid|$exe|$cmd\"; "
         "done",
     ),
+    Probe(
+        "binary_hash",
+        "if command -v ps >/dev/null 2>&1 && command -v sha256sum >/dev/null 2>&1; then "
+        "for pid in $(ps -eo pid= --sort=-%cpu | head -n 30); do "
+        "exe=$(readlink -f /proc/$pid/exe 2>/dev/null || true); "
+        "[ -f \"$exe\" ] || continue; "
+        "sha=$(sha256sum \"$exe\" 2>/dev/null | awk '{print $1}'); "
+        "[ -n \"$sha\" ] && echo \"$pid|$exe|$sha\"; "
+        "done | sort -u; "
+        "else echo 'binary_hash_runtime_unavailable'; fi",
+    ),
     Probe("process", "ls -l /proc/*/exe 2>/dev/null | grep ' (deleted)$' || true"),
     Probe("service", RUNNING_SERVICES_CMD),
     Probe(
@@ -409,6 +420,18 @@ DEEP_READONLY_PROBES = [
         "find /tmp /var/tmp /dev/shm /run /root/.cache /root/.local /root/bin /home/*/.cache /home/*/.local /home/*/bin -maxdepth 4 -type f "
         "2>/dev/null | grep -Ei '(miner|xmrig|stratum|clash|autossh|frp|ngrok|sysupdate|sysguard|dbus-|kworker|kswap|bioset)' "
         "| head -n 200 || true",
+    ),
+    Probe(
+        "binary_hash",
+        "if command -v sha256sum >/dev/null 2>&1; then "
+        "find /tmp /var/tmp /dev/shm /run /root/.cache /root/.local /root/bin /home/*/.cache /home/*/.local /home/*/bin -maxdepth 4 -type f "
+        "2>/dev/null | grep -Ei '(miner|xmrig|stratum|clash|autossh|frp|ngrok|sysupdate|sysguard|dbus-|kworker|kswap|bioset|srb)' "
+        "| head -n 80 | while read -r f; do "
+        "[ -f \"$f\" ] || continue; "
+        "sha=$(sha256sum \"$f\" 2>/dev/null | awk '{print $1}'); "
+        "[ -n \"$sha\" ] && echo \"$f|$sha\"; "
+        "done; "
+        "else echo 'binary_hash_candidate_unavailable'; fi",
     ),
     Probe(
         "container",

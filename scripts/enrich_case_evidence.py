@@ -44,6 +44,8 @@ PS_EXTENDED_RE = re.compile(
 )
 PROC_EXE_MAP_RE = re.compile(r"^\s*(?P<pid>\d+)\|(?P<exe>[^|]+)\|(?P<cmd>.*)$")
 PROC_FALLBACK_RE = re.compile(r"^\s*(?P<pid>\d+)\|(?P<state>[A-Za-z])\|(?P<cmd>.+)$")
+PROCESS_BINARY_HASH_RE = re.compile(r"^\s*(?P<pid>\d+)\|(?P<path>[^|]+)\|(?P<sha>[a-fA-F0-9]{64})$")
+CANDIDATE_BINARY_HASH_RE = re.compile(r"^\s*(?P<path>/[^|]+)\|(?P<sha>[a-fA-F0-9]{64})$")
 GREP_CTX_RE = re.compile(r"^(?P<path>[^:\n]+):(?P<line>\d+):(?P<body>.*)$")
 IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 RUNTIME_HINT_RE = re.compile(
@@ -361,6 +363,22 @@ def parse_top_process_line(line: str) -> dict[str, Any] | None:
     return None
 
 
+def dedupe_hash_entries(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str, str]] = set()
+    out: list[dict[str, Any]] = []
+    for item in items:
+        key = (
+            str(item.get("pid", "")).strip(),
+            str(item.get("path", "")).strip(),
+            str(item.get("sha256", "")).strip(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
 def finding_shape(
     finding_id: str,
     statement: str,
@@ -462,6 +480,8 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
     fallback_markers: list[str] = []
     fallback_marker_ids: set[str] = set()
     cron_runtime_candidates: list[dict[str, Any]] = []
+    process_binary_hashes: list[dict[str, Any]] = []
+    candidate_binary_hashes: list[dict[str, Any]] = []
     initial_access_review_hits: list[str] = []
     container_cloud_review_hits: list[str] = []
     network_ioc_hits: list[str] = []
@@ -676,6 +696,33 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
                 if profile.get("schedule") and len(cron_runtime_candidates) < 40:
                     cron_runtime_candidates.append(profile)
 
+        if source == "binary_hash":
+            for line in stdout.splitlines():
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                mp = PROCESS_BINARY_HASH_RE.match(stripped)
+                if mp:
+                    process_binary_hashes.append(
+                        {
+                            "pid": mp.group("pid").strip(),
+                            "path": mp.group("path").strip(),
+                            "sha256": mp.group("sha").strip(),
+                            "evidence_id": evid_id,
+                        }
+                    )
+                    continue
+                mc = CANDIDATE_BINARY_HASH_RE.match(stripped)
+                if mc:
+                    candidate_binary_hashes.append(
+                        {
+                            "pid": "",
+                            "path": mc.group("path").strip(),
+                            "sha256": mc.group("sha").strip(),
+                            "evidence_id": evid_id,
+                        }
+                    )
+
         if source == "privilege" and stdout.strip():
             for line in stdout.splitlines():
                 stripped = line.strip()
@@ -692,12 +739,22 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
                     kernel_review_hits.append(line.strip())
 
     runtime_profiles = dedupe_runtime_profiles(runtime_profiles)
+    process_binary_hashes = dedupe_hash_entries(process_binary_hashes)
+    candidate_binary_hashes = dedupe_hash_entries(candidate_binary_hashes)
+    binary_hash_by_path = {
+        str(item.get("path", "")).strip(): item
+        for item in process_binary_hashes + candidate_binary_hashes
+        if str(item.get("path", "")).strip()
+    }
     for item in top_cpu_processes:
         pid = str(item.get("pid", "")).strip()
         if pid and pid in process_exe_by_pid:
             item["executable"] = process_exe_by_pid[pid]
         if pid and not item.get("command") and pid in process_cmd_by_pid:
             item["command"] = process_cmd_by_pid[pid]
+        exe = str(item.get("executable", "")).strip()
+        if exe and exe in binary_hash_by_path:
+            item["sha256"] = str(binary_hash_by_path[exe].get("sha256", "")).strip()
         cmd_blob = f"{item.get('command', '')} {item.get('executable', '')}".strip()
         item["miner_keyword_hit"] = bool(MINER_KEYWORD_RE.search(cmd_blob))
     dedup_top: list[dict[str, Any]] = []
@@ -751,6 +808,41 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
         )
     )
     top_cpu_keyword_hits = sum(1 for x in top_cpu_processes if x.get("miner_keyword_hit"))
+    for item in runtime_profiles:
+        exe = str(item.get("executable", "")).strip()
+        if exe and exe in binary_hash_by_path:
+            item["sha256"] = str(binary_hash_by_path[exe].get("sha256", "")).strip()
+
+    malware_file_candidates: list[dict[str, Any]] = []
+    for item in runtime_profiles:
+        malware_file_candidates.append(
+            {
+                "path": str(item.get("executable", "")).strip(),
+                "sha256": str(item.get("sha256", "")).strip(),
+                "evidence_id": str(item.get("evidence_id", "")).strip(),
+                "origin_path": str(item.get("origin_path", "")).strip(),
+                "origin_line": str(item.get("origin_line", "")).strip(),
+                "role_guess": "miner_runtime",
+                "algorithm": str(item.get("algorithm", "")).strip(),
+                "pool": str(item.get("pool", "")).strip(),
+                "wallet": str(item.get("wallet", "")).strip(),
+            }
+        )
+    for item in candidate_binary_hashes:
+        malware_file_candidates.append(
+            {
+                "path": str(item.get("path", "")).strip(),
+                "sha256": str(item.get("sha256", "")).strip(),
+                "evidence_id": str(item.get("evidence_id", "")).strip(),
+                "origin_path": "",
+                "origin_line": "",
+                "role_guess": "candidate_binary",
+                "algorithm": "",
+                "pool": "",
+                "wallet": "",
+            }
+        )
+    malware_file_candidates = dedupe_hash_entries(malware_file_candidates)
 
     fidx = len(existing_findings)
 
@@ -872,6 +964,21 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
                 claim_type="observed_fact",
                 hypothesis_id="H-AUTO-RUNTIME-001",
                 confidence_reason="Fields were parsed directly from process, service, or scheduled-command artifacts.",
+            )
+        )
+
+    if malware_file_candidates:
+        fidx += 1
+        file_ids = sorted({str(x.get("evidence_id", "")).strip() for x in malware_file_candidates if str(x.get("evidence_id", "")).strip()})
+        finding_add.append(
+            finding_shape(
+                finding_id=f"F-AUTO-{fidx:03d}",
+                statement=f"File correlation recovered {len(malware_file_candidates)} suspicious executable path/hash candidate(s) from runtime or drop-path evidence.",
+                confidence="medium" if any(str(x.get("sha256", "")).strip() for x in malware_file_candidates) else "low",
+                evidence_ids=file_ids,
+                claim_type="observed_fact",
+                hypothesis_id="H-AUTO-FILE-001",
+                confidence_reason="Executable paths come from live runtime or suspicious file locations; file hashes are included when direct readonly hashing succeeded.",
             )
         )
 
@@ -1074,6 +1181,21 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
     )
     hypothesis_matrix.append(
         matrix_item(
+            "H-MATRIX-FILE-001",
+            "Malware file and hash correlation hypothesis",
+            "supported" if malware_file_candidates else "inconclusive",
+            "medium" if any(str(x.get("sha256", "")).strip() for x in malware_file_candidates) else "low",
+            sorted({str(x.get("evidence_id", "")).strip() for x in malware_file_candidates if str(x.get("evidence_id", "")).strip()}),
+            [],
+            (
+                f"Recovered {len(malware_file_candidates)} suspicious file candidate(s), with hashes on {sum(1 for x in malware_file_candidates if str(x.get('sha256', '')).strip())} item(s)."
+                if malware_file_candidates
+                else "No suspicious executable path/hash correlation was recovered in this pass."
+            ),
+        )
+    )
+    hypothesis_matrix.append(
+        matrix_item(
             "H-MATRIX-NET-001",
             "Network IOC and outbound control hypothesis",
             "supported" if has_network_ioc else "inconclusive",
@@ -1167,6 +1289,9 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
         "runtime_passwords": runtime_passwords[:12],
         "runtime_cpu_threads": runtime_threads[:12],
         "runtime_exec_paths": runtime_exec_paths[:12],
+        "process_binary_hashes": process_binary_hashes[:30],
+        "candidate_binary_hashes": candidate_binary_hashes[:30],
+        "malware_file_candidates": malware_file_candidates[:30],
         "cron_runtime_candidate_count": len(cron_runtime_candidates),
         "cron_runtime_candidates": cron_runtime_candidates[:20],
         "timeline_count": len(merged_timeline),

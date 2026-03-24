@@ -59,10 +59,14 @@ reports/
 `-- <host-or-ip>-<utc-timestamp>/
     |-- artifacts/
     |-- evidence/
+    |-- leadership-report.md
+    |-- leadership-report.zh-CN.md
     |-- meta/
+    |   `-- report-manifest.json
     |-- report.md
     |-- report.zh-CN.md
     `-- reports/
+        |-- external-evidence-checklist.md
         |-- index.md
         |-- index.zh-CN.md
         |-- management-summary.md
@@ -74,11 +78,24 @@ reports/
         `-- operator-brief.json
 ```
 
+固定输出约束：
+
+- 成功导出时，以上文件集合必须齐全；缺少任意核心文件都应视为导出失败，而不是“部分成功”。
+- `leadership-report.zh-CN.md` / `leadership-report.md` 是单文件汇总件，不需要再跳转其它文件即可了解案件全貌。
+- `meta/report-manifest.json` 会记录本次应存在的固定产物清单，便于核对交付完整性。
+
 建议阅读顺序：
 
-1. `reports/index.zh-CN.md`
+1. `leadership-report.zh-CN.md`
 2. `reports/management-summary.zh-CN.md` 或 `reports/soc-summary.zh-CN.md`
 3. `report.zh-CN.md`
+4. `reports/index.zh-CN.md`
+
+其中：
+
+- `leadership-report.zh-CN.md`：给领导或复核人直接阅读的独立汇总件，强调“怎么进来的、何时进来的、进来做了什么、现在影响到什么、建议怎么处置”。
+- `report.zh-CN.md`：完整证据报告，保留证据编号、证据链、跳转和详细上下文。
+- `reports/operator-brief.zh-CN.md`：给非安全同学执行落地动作时参考的简报。
 
 ## 项目结构与文件职责
 

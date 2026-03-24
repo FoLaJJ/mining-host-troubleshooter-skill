@@ -100,7 +100,7 @@ Follow this order unless the user gives a narrower scope:
 9. Compare against history when available.
    - Use same-host case diffing and same-host clean baselines to suppress repeated normal patterns.
 10. Export the report.
-   - Keep it concise, evidence-bound, and explicit about gaps.
+   - Keep it concise, evidence-bound, explicit about gaps, and always produce the standalone leadership report in both languages.
 
 ## Preferred Automation Path
 
@@ -125,9 +125,9 @@ Behavior:
    - Includes GPU-aware correlation: GPU adapters, utilization, GPU compute-process mapping, and suspicious PID/keyword correlation when available.
 5. Validates the case bundle.
 6. Optionally applies a same-host clean baseline when `--baseline <BASELINE_JSON>` is provided.
-7. Exports `report.md`, `report.zh-CN.md`, `reports/index.md`, `reports/index.zh-CN.md`, `reports/management-summary.md`, `reports/management-summary.zh-CN.md`, `reports/soc-summary.md`, and `reports/soc-summary.zh-CN.md`. The index pages act as case-bundle landing pages with status cards, key-risk summaries, reading order, report inventories, and directory status, and full reports use source-grouped evidence navigation, fixed section anchors, and clickable evidence IDs that jump to detail blocks and link to artifact files.
+7. Exports a fixed report set: `leadership-report.md`, `leadership-report.zh-CN.md`, `report.md`, `report.zh-CN.md`, `reports/index.md`, `reports/index.zh-CN.md`, `reports/management-summary.md`, `reports/management-summary.zh-CN.md`, `reports/soc-summary.md`, `reports/soc-summary.zh-CN.md`, `reports/operator-brief.md`, `reports/operator-brief.zh-CN.md`, `reports/operator-brief.json`, `reports/external-evidence-checklist.md`, and `meta/report-manifest.json`. The leadership reports are standalone review artifacts; the full reports keep evidence navigation, fixed anchors, and artifact links.
 8. Accepts operator-friendly remote shortcut input: `--remote-user <USER> --remote-ip <IP>` with password env/prompt, and optional `--trust-on-first-use` for first-seen hosts.
-9. Generates `reports/operator-brief.zh-CN.md`, `reports/operator-brief.md`, and `reports/operator-brief.json` for non-specialist users.
+9. Treats missing required outputs as workflow failure. A partial report set must not be presented as successful completion.
 
 If the user wants staged control, use these scripts separately:
 
@@ -199,6 +199,7 @@ Every final output should include:
 8. Clear statement of confirmed vs inconclusive items.
 9. Claim type (`observed_fact` / `inference` / `attribution`) and confidence reason for each key conclusion.
 10. False-positive control note when high compute might be legitimate.
+11. A standalone leadership report in both languages that can be read without evidence jumps and that covers suspected ingress path, earliest relevant time, post-access activity, mining or malware details, system state, service exposure, lateral-movement assessment, evidence excerpts, and novice-friendly response steps.
 
 When exporting files, use the case-bundle layout under `reports/<case>/` and prefer the bundled report exporter.
 

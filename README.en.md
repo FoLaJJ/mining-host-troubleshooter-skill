@@ -59,10 +59,14 @@ reports/
 `-- <host-or-ip>-<utc-timestamp>/
     |-- artifacts/
     |-- evidence/
+    |-- leadership-report.md
+    |-- leadership-report.zh-CN.md
     |-- meta/
+    |   `-- report-manifest.json
     |-- report.md
     |-- report.zh-CN.md
     `-- reports/
+        |-- external-evidence-checklist.md
         |-- index.md
         |-- index.zh-CN.md
         |-- management-summary.md
@@ -74,11 +78,24 @@ reports/
         `-- operator-brief.json
 ```
 
+Fixed output contract:
+
+- A successful export must produce the full file set above. Missing any required report is treated as export failure, not partial success.
+- `leadership-report.md` and `leadership-report.zh-CN.md` are standalone review reports that do not require jumping across other files.
+- `meta/report-manifest.json` records the required output set for completeness checks.
+
 Recommended reading order:
 
-1. `reports/index.md`
+1. `leadership-report.md`
 2. `reports/management-summary.md` or `reports/soc-summary.md`
 3. `report.md`
+4. `reports/index.md`
+
+Roles of the main outputs:
+
+- `leadership-report.md`: single-file review narrative covering suspected ingress path, likely timing, attacker activity, mining details, host state, and response plan.
+- `report.md`: full evidence report with evidence IDs, traceable links, and detailed context.
+- `reports/operator-brief.md`: short execution-facing brief for non-specialist operators.
 
 ## Project Structure And File Responsibilities
 

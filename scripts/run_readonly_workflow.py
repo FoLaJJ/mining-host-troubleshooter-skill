@@ -109,6 +109,34 @@ def load_json_file(path: str) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def expected_report_outputs(case_dir: str) -> list[Path]:
+    base = Path(case_dir)
+    reports_dir = base / "reports"
+    return [
+        base / "report.md",
+        base / "report.zh-CN.md",
+        base / "leadership-report.md",
+        base / "leadership-report.zh-CN.md",
+        base / "meta" / "report-manifest.json",
+        reports_dir / "index.md",
+        reports_dir / "index.zh-CN.md",
+        reports_dir / "management-summary.md",
+        reports_dir / "management-summary.zh-CN.md",
+        reports_dir / "soc-summary.md",
+        reports_dir / "soc-summary.zh-CN.md",
+        reports_dir / "operator-brief.md",
+        reports_dir / "operator-brief.zh-CN.md",
+        reports_dir / "operator-brief.json",
+        reports_dir / "external-evidence-checklist.md",
+    ]
+
+
+def verify_expected_report_outputs(case_dir: str) -> None:
+    missing = [str(path) for path in expected_report_outputs(case_dir) if not path.exists()]
+    if missing:
+        raise SystemExit("Expected report outputs missing:\n- " + "\n- ".join(missing))
+
+
 def write_checkpoint(case_dir: str, stage: str, status: str = "completed", note: str = "", extra: dict | None = None) -> None:
     meta = Path(case_dir) / "meta"
     meta.mkdir(parents=True, exist_ok=True)
@@ -578,6 +606,20 @@ def main() -> int:
             return code
         write_checkpoint(case_dir, "operator_brief_complete", extra={"brief_path": str(Path(case_dir) / "reports" / "operator-brief.zh-CN.md")})
 
+        checklist_cmd = [
+            sys.executable,
+            str(external_evidence_script),
+            "--input",
+            evidence_for_next,
+            "--case-dir",
+            case_dir,
+        ]
+        code, _ = run_step("export_external_evidence_checklist", checklist_cmd)
+        if code != 0:
+            print("[ERROR] export_external_evidence_checklist failed", file=sys.stderr)
+            return code
+        write_checkpoint(case_dir, "external_evidence_checklist_complete", extra={"checklist_path": str(Path(case_dir) / "reports" / "external-evidence-checklist.md")})
+
         export_cmd = [
             sys.executable,
             str(export_script),
@@ -594,20 +636,16 @@ def main() -> int:
         if code != 0:
             print("[ERROR] export_investigation_report failed", file=sys.stderr)
             return code
-        write_checkpoint(case_dir, "approval_gated_response_plan_complete", extra={"report_path": str(Path(case_dir) / "reports" / "report.md")})
-        checklist_cmd = [
-            sys.executable,
-            str(external_evidence_script),
-            "--input",
-            evidence_for_next,
-            "--case-dir",
+        verify_expected_report_outputs(case_dir)
+        write_checkpoint(
             case_dir,
-        ]
-        code, _ = run_step("export_external_evidence_checklist", checklist_cmd)
-        if code != 0:
-            print("[ERROR] export_external_evidence_checklist failed", file=sys.stderr)
-            return code
-        write_checkpoint(case_dir, "external_evidence_checklist_complete", extra={"checklist_path": str(Path(case_dir) / "reports" / "external-evidence-checklist.md")})
+            "approval_gated_response_plan_complete",
+            extra={
+                "leadership_report_path": str(Path(case_dir) / "leadership-report.zh-CN.md"),
+                "report_path": str(Path(case_dir) / "report.zh-CN.md"),
+            },
+        )
+        write_checkpoint(case_dir, "report_output_contract_verified", extra={"expected_output_count": len(expected_report_outputs(case_dir))})
 
     if args.compare_base_case:
         compare_cmd = [
@@ -637,11 +675,14 @@ def main() -> int:
     if not args.skip_export:
         print(f"[DONE] Report: {Path(case_dir) / 'report.md'}")
         print(f"[DONE] Chinese Report: {Path(case_dir) / 'report.zh-CN.md'}")
+        print(f"[DONE] Leadership Report: {Path(case_dir) / 'leadership-report.md'}")
+        print(f"[DONE] Leadership Report (ZH): {Path(case_dir) / 'leadership-report.zh-CN.md'}")
         print(f"[DONE] Management Summary: {Path(case_dir) / 'reports' / 'management-summary.md'}")
         print(f"[DONE] SOC Summary: {Path(case_dir) / 'reports' / 'soc-summary.md'}")
         print(f"[DONE] External Evidence Checklist: {Path(case_dir) / 'reports' / 'external-evidence-checklist.md'}")
         print(f"[DONE] Operator Brief (ZH): {Path(case_dir) / 'reports' / 'operator-brief.zh-CN.md'}")
         print(f"[DONE] Operator Brief (EN): {Path(case_dir) / 'reports' / 'operator-brief.md'}")
+        print(f"[DONE] Report Manifest: {Path(case_dir) / 'meta' / 'report-manifest.json'}")
     return 0
 
 
