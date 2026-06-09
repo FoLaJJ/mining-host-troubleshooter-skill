@@ -21,8 +21,9 @@ This skill is an investigation skill, not a remediation skill.
 6. Never fabricate facts, command output, timelines, attacker behavior, or attribution.
 7. If evidence is insufficient, say `inconclusive`.
 8. Distinguish every key conclusion as `observed_fact`, `inference`, or `attribution`, and include a confidence reason.
-9. Keep traceable IPs visible in internal reports unless the user asks for redaction.
-10. Protect passwords, tokens, private keys, and wallet secrets. Redact them even in internal notes when full value disclosure is not necessary.
+9. Keep primary conclusions conservative. Route weaker clues into explicit `inconclusive` investigative leads instead of promoting them into the main case narrative.
+10. Keep traceable IPs visible in internal reports unless the user asks for redaction.
+11. Protect passwords, tokens, private keys, and wallet secrets. Redact them even in internal notes when full value disclosure is not necessary.
 
 ## Scope Control
 
@@ -148,6 +149,7 @@ Every final report should include:
 9. Local privesc review result if collected
 10. Unknowns, gaps, and explicit confidence limits
 11. Approval-gated follow-up actions, if the user requested remediation
+12. Clear separation between primary conclusions and weaker investigative leads
 
 ## Dangerous Command Gate
 
@@ -177,6 +179,7 @@ Load only what is needed:
 7. [references/reporting-and-traceability.md](references/reporting-and-traceability.md) for report discipline
 8. [references/usage-scenarios.md](references/usage-scenarios.md) for operator examples
 9. [references/deception-and-contradiction-review.md](references/deception-and-contradiction-review.md) for fake-signal and cross-source contradiction handling
+10. [references/harness-discipline.md](references/harness-discipline.md) when evidence-linking discipline must stay strict, especially for weaker-model execution or noisy scenes
 
 ## Maintainer Rules
 

@@ -27,7 +27,7 @@ def target_label(args: argparse.Namespace) -> str:
 
 
 def default_case_root() -> str:
-    return str((Path.cwd() / "reports").resolve())
+    return str(Path.cwd().resolve())
 
 
 def run_step(name: str, cmd: list[str]) -> tuple[int, str]:
@@ -424,7 +424,7 @@ def main() -> int:
         description="Run optimized read-only workflow: collect evidence + optional report export."
     )
     parser.add_argument("--output", help="Output evidence JSON path. Usually omit to use case layout.")
-    parser.add_argument("--case-root", default=default_case_root(), help="Root directory for case bundles. Defaults to <current working directory>/reports.")
+    parser.add_argument("--case-root", default=default_case_root(), help="Root directory for case bundles. Defaults to the current working directory; a new case folder is created under it.")
     parser.add_argument("--case-dir", help="Explicit case directory path.")
     parser.add_argument("--case-tag", help="Case folder tag (auto if omitted).")
     parser.add_argument("--incident-id", help="Incident ID override.")

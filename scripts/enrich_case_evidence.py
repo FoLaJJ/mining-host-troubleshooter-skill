@@ -471,6 +471,257 @@ def contradiction_shape(
     }
 
 
+def matrix_item(
+    hypothesis_id: str,
+    title: str,
+    status: str,
+    confidence: str,
+    support_ids: list[str],
+    counter_ids: list[str],
+    summary: str,
+) -> dict[str, Any]:
+    return {
+        "hypothesis_id": hypothesis_id,
+        "title": title,
+        "status": status,
+        "confidence": confidence,
+        "supporting_evidence_ids": sorted({x for x in support_ids if x}),
+        "counter_evidence_ids": sorted({x for x in counter_ids if x}),
+        "summary": summary,
+    }
+
+
+def build_source_id_index(evidence_items: list[dict[str, Any]]) -> dict[str, list[str]]:
+    source_ids: dict[str, list[str]] = {}
+    for item in evidence_items:
+        src = str(item.get("source", "")).strip()
+        evid = str(item.get("id", "")).strip()
+        if src and evid:
+            source_ids.setdefault(src, []).append(evid)
+    return source_ids
+
+
+def gpu_visibility_assessment(
+    gpu_utilization_samples: list[dict[str, Any]],
+    gpu_suspicious_processes: list[dict[str, str]],
+    gpu_compute_processes: list[dict[str, str]],
+    gpu_adapter_lines: list[str],
+    gpu_vendor_hints: set[str],
+    gpu_fallback_markers: list[str],
+) -> tuple[int, str, str]:
+    gpu_utils = [
+        safe
+        for safe in [parse_int_from_text(str(x.get("utilization", ""))) for x in gpu_utilization_samples]
+        if safe is not None
+    ]
+    gpu_peak_util = max(gpu_utils) if gpu_utils else 0
+    if gpu_suspicious_processes:
+        gpu_visibility_status = "suspicious_runtime"
+    elif gpu_compute_processes or gpu_peak_util > 0:
+        gpu_visibility_status = "active_no_direct_miner_match"
+    elif gpu_adapter_lines or gpu_vendor_hints:
+        gpu_visibility_status = "hardware_visible_no_runtime"
+    elif gpu_fallback_markers:
+        gpu_visibility_status = "tooling_limited"
+    else:
+        gpu_visibility_status = "not_observed"
+    gpu_visibility_summary = (
+        f"status={gpu_visibility_status}, vendors={','.join(sorted(gpu_vendor_hints)) or 'none'}, "
+        f"adapter_lines={len(gpu_adapter_lines)}, compute_processes={len(gpu_compute_processes)}, "
+        f"suspicious_processes={len(gpu_suspicious_processes)}, peak_utilization={gpu_peak_util}%, "
+        f"fallback_markers={','.join(gpu_fallback_markers[:6]) or 'none'}"
+    )
+    return gpu_peak_util, gpu_visibility_status, gpu_visibility_summary
+
+
+def log_tampering_hypothesis(
+    log_integrity: list[dict[str, Any]],
+    source_ids: dict[str, list[str]],
+) -> dict[str, Any] | None:
+    statuses = {
+        str(item.get("status", "")).strip().lower()
+        for item in log_integrity
+        if str(item.get("status", "")).strip()
+    }
+    risky_statuses = statuses & {"missing", "tampered", "suspicious"}
+    if not risky_statuses:
+        return None
+
+    support_ids = source_ids.get("log_integrity", [])
+    if "tampered" in risky_statuses:
+        status = "supported"
+        confidence = "medium"
+        summary = "Direct log-tampering indicators were observed on at least one primary log artifact."
+    else:
+        status = "inconclusive"
+        confidence = "low"
+        summary = (
+            "Primary log visibility is reduced by missing or suspicious log artifacts. "
+            "This lowers reconstruction confidence, but log tampering is not confirmed from this evidence alone."
+        )
+
+    return {
+        "hypothesis_id": "H-MATRIX-LOG-001",
+        "title": "Log tampering hypothesis",
+        "status": status,
+        "confidence": confidence,
+        "supporting_evidence_ids": sorted({x for x in support_ids if x}),
+        "counter_evidence_ids": [],
+        "summary": summary,
+    }
+
+
+def build_hypothesis_matrix(
+    evidence_items: list[dict[str, Any]],
+    data: dict[str, Any],
+    gpu_probe_ids: set[str],
+    gpu_suspicious_processes: list[dict[str, str]],
+    gpu_compute_processes: list[dict[str, str]],
+    gpu_peak_util: int,
+    failed_count: int,
+    invalid_count: int,
+    initial_access_review_hits: list[str],
+    kernel_review_hits: list[str],
+    lpe_privesc_plausible: bool,
+    has_lpe_surface_review: bool,
+    lpe_review_ids: list[str],
+    possible_lpe_cves: list[str],
+    kernel_release: str,
+    sudo_package_version: str,
+    lpe_visibility_summary: str,
+    runtime_profiles: list[dict[str, Any]],
+    runtime_algorithms: list[str],
+    runtime_pools: list[str],
+    runtime_proxies: list[str],
+    runtime_wallets: list[str],
+    malware_file_candidates: list[dict[str, Any]],
+    network_ioc_hits: list[str],
+    ioc_process_lines: list[str],
+) -> list[dict[str, Any]]:
+    has_network_ioc = bool(network_ioc_hits)
+    has_process_ioc = bool(ioc_process_lines)
+    has_runtime_profile = bool(runtime_profiles)
+    has_auth_pressure = failed_count > 0 or invalid_count > 0
+    has_persistence_surface = bool(initial_access_review_hits or kernel_review_hits)
+    source_ids = build_source_id_index(evidence_items)
+
+    hypothesis_matrix: list[dict[str, Any]] = [
+        matrix_item(
+            "H-MATRIX-CPU-001",
+            "CPU runtime miner hypothesis",
+            "supported" if has_process_ioc else "inconclusive",
+            "medium" if has_process_ioc else "low",
+            source_ids.get("process", []),
+            [],
+            "Process IOC keyword matches exist." if has_process_ioc else "No direct miner-like process keyword match was observed in this pass.",
+        )
+    ]
+    if gpu_probe_ids:
+        gpu_status = "supported" if gpu_suspicious_processes else ("inconclusive" if gpu_compute_processes or gpu_peak_util > 0 else "not_observed")
+        hypothesis_matrix.append(
+            matrix_item(
+                "H-MATRIX-GPU-001",
+                "GPU runtime miner hypothesis",
+                gpu_status,
+                "medium" if gpu_suspicious_processes else "low",
+                sorted(gpu_probe_ids),
+                source_ids.get("process", []) if not gpu_suspicious_processes else [],
+                (
+                    f"GPU suspicious process correlations={len(gpu_suspicious_processes)}, peak utilization={gpu_peak_util}%."
+                    if gpu_suspicious_processes
+                    else f"GPU activity observed (peak utilization={gpu_peak_util}%), but no direct miner-linked GPU process was confirmed."
+                ),
+            )
+        )
+    hypothesis_matrix.extend(
+        [
+            matrix_item(
+                "H-MATRIX-ACCESS-001",
+                "Credential or initial-access abuse hypothesis",
+                "supported" if has_auth_pressure else ("inconclusive" if initial_access_review_hits else "not_observed"),
+                "medium" if has_auth_pressure else "low",
+                source_ids.get("auth", []) + source_ids.get("persistence", []),
+                [],
+                (
+                    f"Authentication pressure observed (failed={failed_count}, invalid={invalid_count})."
+                    if has_auth_pressure
+                    else "Only review-surface signals are present; direct credential abuse evidence is limited."
+                ),
+            ),
+            matrix_item(
+                "H-MATRIX-LPE-001",
+                "Local privilege escalation hypothesis",
+                "supported" if lpe_privesc_plausible else ("inconclusive" if has_lpe_surface_review else "not_observed"),
+                "medium" if lpe_privesc_plausible else "low",
+                sorted(set(lpe_review_ids + source_ids.get("auth", []) + source_ids.get("persistence", []))),
+                [],
+                (
+                    f"Possible LPE exposure indicators: {', '.join(possible_lpe_cves)}; kernel={kernel_release}; sudo_pkg={sudo_package_version}."
+                    if lpe_privesc_plausible
+                    else (
+                        f"LPE review surfaces were collected ({lpe_visibility_summary}), but the available evidence does not confirm that a local privesc path was actually used."
+                        if has_lpe_surface_review
+                        else "No dedicated local privilege-escalation review surface was observed in this pass."
+                    )
+                ),
+            ),
+            matrix_item(
+                "H-MATRIX-PERSIST-001",
+                "Persistence foothold hypothesis",
+                "supported" if has_persistence_surface else "inconclusive",
+                "low",
+                source_ids.get("persistence", []) + source_ids.get("service", []),
+                [],
+                "Persistence review surfaces contain suspicious lines and require analyst confirmation."
+                if has_persistence_surface
+                else "No persistence surface hit was observed in this pass.",
+            ),
+            matrix_item(
+                "H-MATRIX-RUNTIME-001",
+                "Parsed miner runtime profile hypothesis",
+                "supported" if has_runtime_profile else "inconclusive",
+                "high" if has_runtime_profile else "low",
+                sorted({str(x.get("evidence_id", "")).strip() for x in runtime_profiles if str(x.get("evidence_id", "")).strip()}),
+                [],
+                (
+                    f"Parsed {len(runtime_profiles)} runtime profile(s): algorithms={len(runtime_algorithms)}, pools={len(runtime_pools)}, proxies={len(runtime_proxies)}, wallets={len(runtime_wallets)}."
+                    if has_runtime_profile
+                    else "No command line with parseable miner runtime fields was observed in this pass."
+                ),
+            ),
+            matrix_item(
+                "H-MATRIX-FILE-001",
+                "Malware file and hash correlation hypothesis",
+                "supported" if malware_file_candidates else "inconclusive",
+                "medium" if any(str(x.get("sha256", "")).strip() for x in malware_file_candidates) else "low",
+                sorted({str(x.get("evidence_id", "")).strip() for x in malware_file_candidates if str(x.get("evidence_id", "")).strip()}),
+                [],
+                (
+                    f"Recovered {len(malware_file_candidates)} suspicious file candidate(s), with hashes on {sum(1 for x in malware_file_candidates if str(x.get('sha256', '')).strip())} item(s)."
+                    if malware_file_candidates
+                    else "No suspicious executable path/hash correlation was recovered in this pass."
+                ),
+            ),
+            matrix_item(
+                "H-MATRIX-NET-001",
+                "Network IOC and outbound control hypothesis",
+                "supported" if has_network_ioc else "inconclusive",
+                "low",
+                source_ids.get("network_ioc", []) + source_ids.get("network", []),
+                [],
+                "Pool/wallet/deployment keyword matches are present in network IOC review." if has_network_ioc else "No direct pool/wallet keyword hit in this pass.",
+            ),
+        ]
+    )
+    log_tampering_item = log_tampering_hypothesis(
+        [as_dict(x) for x in as_list(data.get("log_integrity"))],
+        source_ids,
+    )
+    if log_tampering_item:
+        hypothesis_matrix.append(log_tampering_item)
+    return hypothesis_matrix
+
+
 def enrich(data: dict[str, Any]) -> dict[str, Any]:
     evidence_items = [as_dict(x) for x in as_list(data.get("evidence"))]
     existing_findings = [as_dict(x) for x in as_list(data.get("findings"))]
@@ -1456,184 +1707,41 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
-    gpu_utils = [safe for safe in [parse_int_from_text(str(x.get("utilization", ""))) for x in gpu_utilization_samples] if safe is not None]
-    gpu_peak_util = max(gpu_utils) if gpu_utils else 0
-    if gpu_suspicious_processes:
-        gpu_visibility_status = "suspicious_runtime"
-    elif gpu_compute_processes or gpu_peak_util > 0:
-        gpu_visibility_status = "active_no_direct_miner_match"
-    elif gpu_adapter_lines or gpu_vendor_hints:
-        gpu_visibility_status = "hardware_visible_no_runtime"
-    elif gpu_fallback_markers:
-        gpu_visibility_status = "tooling_limited"
-    else:
-        gpu_visibility_status = "not_observed"
-    gpu_visibility_summary = (
-        f"status={gpu_visibility_status}, vendors={','.join(sorted(gpu_vendor_hints)) or 'none'}, "
-        f"adapter_lines={len(gpu_adapter_lines)}, compute_processes={len(gpu_compute_processes)}, "
-        f"suspicious_processes={len(gpu_suspicious_processes)}, peak_utilization={gpu_peak_util}%, "
-        f"fallback_markers={','.join(gpu_fallback_markers[:6]) or 'none'}"
+    gpu_peak_util, gpu_visibility_status, gpu_visibility_summary = gpu_visibility_assessment(
+        gpu_utilization_samples,
+        gpu_suspicious_processes,
+        gpu_compute_processes,
+        gpu_adapter_lines,
+        gpu_vendor_hints,
+        gpu_fallback_markers,
     )
-    has_network_ioc = bool(network_ioc_hits)
-    has_process_ioc = bool(ioc_process_lines)
-    has_runtime_profile = bool(runtime_profiles)
-    has_auth_pressure = failed_count > 0 or invalid_count > 0
-    has_persistence_surface = bool(initial_access_review_hits or kernel_review_hits)
-    def matrix_item(
-        hypothesis_id: str,
-        title: str,
-        status: str,
-        confidence: str,
-        support_ids: list[str],
-        counter_ids: list[str],
-        summary: str,
-    ) -> dict[str, Any]:
-        return {
-            "hypothesis_id": hypothesis_id,
-            "title": title,
-            "status": status,
-            "confidence": confidence,
-            "supporting_evidence_ids": sorted({x for x in support_ids if x}),
-            "counter_evidence_ids": sorted({x for x in counter_ids if x}),
-            "summary": summary,
-        }
-
-    src_ids = {}
-    for item in evidence_items:
-        src = str(item.get("source", "")).strip()
-        evid = str(item.get("id", "")).strip()
-        if src and evid:
-            src_ids.setdefault(src, []).append(evid)
-
-    hypothesis_matrix: list[dict[str, Any]] = []
-    hypothesis_matrix.append(
-        matrix_item(
-            "H-MATRIX-CPU-001",
-            "CPU runtime miner hypothesis",
-            "supported" if has_process_ioc else "inconclusive",
-            "medium" if has_process_ioc else "low",
-            src_ids.get("process", []),
-            [],
-            "Process IOC keyword matches exist." if has_process_ioc else "No direct miner-like process keyword match was observed in this pass.",
-        )
+    hypothesis_matrix = build_hypothesis_matrix(
+        evidence_items=evidence_items,
+        data=data,
+        gpu_probe_ids=gpu_probe_ids,
+        gpu_suspicious_processes=gpu_suspicious_processes,
+        gpu_compute_processes=gpu_compute_processes,
+        gpu_peak_util=gpu_peak_util,
+        failed_count=failed_count,
+        invalid_count=invalid_count,
+        initial_access_review_hits=initial_access_review_hits,
+        kernel_review_hits=kernel_review_hits,
+        lpe_privesc_plausible=lpe_privesc_plausible,
+        has_lpe_surface_review=has_lpe_surface_review,
+        lpe_review_ids=lpe_review_ids,
+        possible_lpe_cves=possible_lpe_cves,
+        kernel_release=kernel_release,
+        sudo_package_version=sudo_package_version,
+        lpe_visibility_summary=lpe_visibility_summary,
+        runtime_profiles=runtime_profiles,
+        runtime_algorithms=runtime_algorithms,
+        runtime_pools=runtime_pools,
+        runtime_proxies=runtime_proxies,
+        runtime_wallets=runtime_wallets,
+        malware_file_candidates=malware_file_candidates,
+        network_ioc_hits=network_ioc_hits,
+        ioc_process_lines=ioc_process_lines,
     )
-    if gpu_probe_ids:
-        gpu_status = "supported" if gpu_suspicious_processes else ("inconclusive" if gpu_compute_processes or gpu_peak_util > 0 else "not_observed")
-        hypothesis_matrix.append(
-            matrix_item(
-                "H-MATRIX-GPU-001",
-                "GPU runtime miner hypothesis",
-                gpu_status,
-                "medium" if gpu_suspicious_processes else "low",
-                sorted(gpu_probe_ids),
-                src_ids.get("process", []) if not gpu_suspicious_processes else [],
-                (
-                    f"GPU suspicious process correlations={len(gpu_suspicious_processes)}, peak utilization={gpu_peak_util}%."
-                    if gpu_suspicious_processes
-                    else f"GPU activity observed (peak utilization={gpu_peak_util}%), but no direct miner-linked GPU process was confirmed."
-                ),
-            )
-        )
-    hypothesis_matrix.append(
-        matrix_item(
-            "H-MATRIX-ACCESS-001",
-            "Credential or initial-access abuse hypothesis",
-            "supported" if has_auth_pressure else ("inconclusive" if initial_access_review_hits else "not_observed"),
-            "medium" if has_auth_pressure else "low",
-            src_ids.get("auth", []) + src_ids.get("persistence", []),
-            [],
-            (
-                f"Authentication pressure observed (failed={failed_count}, invalid={invalid_count})."
-                if has_auth_pressure
-                else "Only review-surface signals are present; direct credential abuse evidence is limited."
-            ),
-        )
-    )
-    hypothesis_matrix.append(
-        matrix_item(
-            "H-MATRIX-LPE-001",
-            "Local privilege escalation hypothesis",
-            "supported" if lpe_privesc_plausible else ("inconclusive" if has_lpe_surface_review else "not_observed"),
-            "medium" if lpe_privesc_plausible else ("low" if has_lpe_surface_review else "low"),
-            sorted(set(lpe_review_ids + src_ids.get("auth", []) + src_ids.get("persistence", []))),
-            [],
-            (
-                f"Possible LPE exposure indicators: {', '.join(possible_lpe_cves)}; kernel={kernel_release}; sudo_pkg={sudo_package_version}."
-                if lpe_privesc_plausible
-                else (
-                    f"LPE review surfaces were collected ({lpe_visibility_summary}), but the available evidence does not confirm that a local privesc path was actually used."
-                    if has_lpe_surface_review
-                    else "No dedicated local privilege-escalation review surface was observed in this pass."
-                )
-            ),
-        )
-    )
-    hypothesis_matrix.append(
-        matrix_item(
-            "H-MATRIX-PERSIST-001",
-            "Persistence foothold hypothesis",
-            "supported" if has_persistence_surface else "inconclusive",
-            "low",
-            src_ids.get("persistence", []) + src_ids.get("service", []),
-            [],
-            "Persistence review surfaces contain suspicious lines and require analyst confirmation."
-            if has_persistence_surface
-            else "No persistence surface hit was observed in this pass.",
-        )
-    )
-    hypothesis_matrix.append(
-        matrix_item(
-            "H-MATRIX-RUNTIME-001",
-            "Parsed miner runtime profile hypothesis",
-            "supported" if has_runtime_profile else "inconclusive",
-            "high" if has_runtime_profile else "low",
-            sorted({str(x.get("evidence_id", "")).strip() for x in runtime_profiles if str(x.get("evidence_id", "")).strip()}),
-            [],
-            (
-                f"Parsed {len(runtime_profiles)} runtime profile(s): algorithms={len(runtime_algorithms)}, pools={len(runtime_pools)}, proxies={len(runtime_proxies)}, wallets={len(runtime_wallets)}."
-                if has_runtime_profile
-                else "No command line with parseable miner runtime fields was observed in this pass."
-            ),
-        )
-    )
-    hypothesis_matrix.append(
-        matrix_item(
-            "H-MATRIX-FILE-001",
-            "Malware file and hash correlation hypothesis",
-            "supported" if malware_file_candidates else "inconclusive",
-            "medium" if any(str(x.get("sha256", "")).strip() for x in malware_file_candidates) else "low",
-            sorted({str(x.get("evidence_id", "")).strip() for x in malware_file_candidates if str(x.get("evidence_id", "")).strip()}),
-            [],
-            (
-                f"Recovered {len(malware_file_candidates)} suspicious file candidate(s), with hashes on {sum(1 for x in malware_file_candidates if str(x.get('sha256', '')).strip())} item(s)."
-                if malware_file_candidates
-                else "No suspicious executable path/hash correlation was recovered in this pass."
-            ),
-        )
-    )
-    hypothesis_matrix.append(
-        matrix_item(
-            "H-MATRIX-NET-001",
-            "Network IOC and outbound control hypothesis",
-            "supported" if has_network_ioc else "inconclusive",
-            "low",
-            src_ids.get("network_ioc", []) + src_ids.get("network", []),
-            [],
-            "Pool/wallet/deployment keyword matches are present in network IOC review." if has_network_ioc else "No direct pool/wallet keyword hit in this pass.",
-        )
-    )
-    if has_log_risk:
-        hypothesis_matrix.append(
-            matrix_item(
-                "H-MATRIX-LOG-001",
-                "Log tampering hypothesis",
-                "supported",
-                "medium",
-                src_ids.get("log_integrity", []),
-                [],
-                "Primary log artifacts show missing/tampered/suspicious state.",
-            )
-        )
 
     merged_findings = dedupe_findings(existing_findings + finding_add)
     merged_timeline = dedupe_timeline(existing_timeline + timeline_add)

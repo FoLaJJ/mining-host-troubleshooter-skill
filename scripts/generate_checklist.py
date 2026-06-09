@@ -72,13 +72,13 @@ ENTERPRISE_GOVERNANCE = [
     "Define incident scope: target host, expected miner role, affected business service, and observation window.",
     "Freeze non-essential changes on the target until read-only collection completes.",
     "Start with command-trust and log-integrity checks before deep collection.",
-    "Collect volatile and high-value evidence into reports/<case>/ instead of ad-hoc folders.",
+    "Collect volatile and high-value evidence into ./<case>/ instead of ad-hoc folders.",
     "Keep conclusions evidence-bound; downgrade confidence immediately when trust or logs are weak.",
     "Treat performance tuning or pool-path checks as a separate, non-default workflow.",
 ]
 
 ENTERPRISE_DELIVERY = [
-    "Run python scripts/validate_case_bundle.py --case-dir reports/<case> --input reports/<case>/evidence/evidence.reviewed.auto.json --strict",
+    "Run python scripts/validate_case_bundle.py --case-dir <case> --input <case>/evidence/evidence.reviewed.auto.json --strict",
     "Export only redacted report artifacts unless raw evidence transfer is explicitly required.",
     "Retain meta/artifact_hashes.json and meta/case_manifest.json with the case bundle.",
     "If a prior case exists for the same host, run compare_case_bundles.py before closing the incident.",
@@ -142,7 +142,7 @@ def main() -> int:
     lines.append("## 5) Safety")
     lines.append("Use scripts/command_guard.py before any non-read-only command.")
     lines.append("Use scripts/redact_output.py before sharing output externally.")
-    lines.append("Write all collected artifacts into reports/<case>/ rather than ad-hoc folders.")
+    lines.append("Write all collected artifacts into ./<case>/ rather than ad-hoc folders.")
 
     if args.os == "linux":
         lines.append("")

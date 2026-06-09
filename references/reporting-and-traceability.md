@@ -41,6 +41,28 @@ When reconstructing the likely attacker path:
 3. Call out small differences that materially change interpretation.
 4. If two explanations remain possible, say so.
 
+## Primary Conclusions vs Investigative Leads
+
+Keep the report split mentally, even if the final format is compact:
+
+1. primary conclusions are for claims that clear the evidence gate
+2. investigative leads are for weak clues that still matter but remain unconfirmed
+3. do not let investigative leads bleed into executive wording
+
+Primary conclusions should carry:
+
+1. `claim_type`
+2. `confidence_reason`
+3. linked `evidence_ids`
+4. wording that survives removal of one weak source
+
+Investigative leads should carry:
+
+1. what was observed
+2. why it matters
+3. why it remains `inconclusive`
+4. supporting and counter-evidence when available
+
 ## Language Rules
 
 Use phrases like:
@@ -57,6 +79,7 @@ Avoid phrases like:
 2. `Certainly`
 3. `The attacker must have`
 4. `This proves exploitation` when only exposure is known
+5. `Logs were clearly deleted by the attacker` when only visibility loss is known
 
 ## Internal vs External Copies
 

@@ -1,4 +1,15 @@
 interface:
   display_name: "Mining Host Troubleshooter"
   short_description: "Read-only Linux compromise and mining diagnostics with detailed evidence correlation"
-  default_prompt: "Investigate this Linux host in read-only mode only. Respect any requested focus such as intrusion, mining, malware, persistence, or local privilege escalation review. Detect distro and version first, pivot correctly when logs are missing, reconstruct attacker behavior from evidence only, keep confidence and traceability explicit, and never execute state-changing commands unless the user explicitly authorizes a separate follow-up step."
+  default_prompt: >-
+    Investigate this Linux host in read-only mode only. Respect any requested
+    focus such as intrusion, mining, malware, persistence, or local privilege
+    escalation review. Detect distro and version first, pivot correctly when
+    logs are missing, and verify command trust before relying on suspicious core
+    command output. Keep primary conclusions conservative: separate
+    observed_fact, inference, and attribution; require concrete evidence IDs for
+    every key conclusion; treat weak clues as inconclusive investigative leads;
+    treat missing logs as visibility loss unless corroborated; treat vulnerable
+    versions as exposure rather than confirmed exploitation; reconstruct
+    attacker behavior from evidence only; and never execute state-changing
+    commands unless the user explicitly authorizes a separate follow-up step.

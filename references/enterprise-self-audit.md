@@ -36,7 +36,7 @@ Use this workflow when a security team, SOC, SIRT, or incident-response team nee
    - For privesc-focused cases, review sudo version, kernel/package exposure, userns/sysctl state, and related read-only review surfaces.
 9. Build the case bundle.
    - Prefer `python scripts/run_readonly_workflow.py ...` or `collect_live_evidence.py`.
-   - By default, case bundles are created under `./reports/<case>/` in the directory where the operator launches the workflow, not under the installed skill directory.
+   - By default, case bundles are created under `./<case>/` in the directory where the operator launches the workflow, not under the installed skill directory.
 10. Reconstruct and validate.
    - Generate `evidence.reviewed.auto.json`.
    - Validate with `validate_case_bundle.py --strict` before concluding root cause or attribution.
@@ -66,7 +66,7 @@ Use this workflow when a security team, SOC, SIRT, or incident-response team nee
 ```bash
 python scripts/generate_checklist.py --os linux --mode remote --type auto --profile enterprise-self-audit
 python scripts/run_readonly_workflow.py --remote <user@host> --identity <key> --analyst <team> --host-name <host> --host-ip <ip> --strict-report
-python scripts/validate_case_bundle.py --case-dir reports/<case> --input reports/<case>/evidence/evidence.reviewed.auto.json --strict
+python scripts/validate_case_bundle.py --case-dir <case> --input <case>/evidence/evidence.reviewed.auto.json --strict
 ```
 
 ## Escalation Triggers

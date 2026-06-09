@@ -25,7 +25,7 @@ RULES = [
     ('remote_login_literal', REMOTE_LOGIN_RE, 'Replace with <REMOTE_USER>@<HOST_IP>.'),
     ('ssh_key_path', SSH_KEY_PATH_RE, 'Replace with <SSH_KEY_PATH>.'),
     ('windows_absolute_path', WINDOWS_ABS_RE, 'Avoid machine-specific absolute paths in shipped docs/examples.'),
-    ('case_output_ip_path', REPORT_CASE_IP_RE, 'Use reports/<case> in examples, not concrete case names.'),
+    ('case_output_ip_path', REPORT_CASE_IP_RE, 'Use <case> placeholders in examples, not concrete case names.'),
 ]
 
 DEFAULT_ALLOW = {

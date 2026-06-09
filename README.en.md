@@ -11,6 +11,7 @@ This repository is a **skill package**, not a manual CLI playbook. In normal usa
 - Minimum disruption: read-only first.
 - Evidence first: collect before concluding.
 - Confidence-gated output: observed fact / inference / attribution.
+- Conservative primary conclusions: key claims need evidence chains; weaker clues stay as inconclusive leads.
 - Scope can be narrowed: intrusion-only, mining-only, malware-only, persistence-only, or privilege-escalation-only review.
 - Approval-gated changes: no state change without explicit approval, and remediation stays out of scope by default.
 
@@ -58,6 +59,7 @@ You can add control constraints directly in plain language:
 - Parses suspicious runtime commands from systemd `ExecStart` and cron/crontab entries.
 - Uses multi-path read-only GPU probing instead of relying on `nvidia-smi` alone, combining `lspci`, `lshw`, `/dev/dri`, `/sys/class/drm`, `/proc/driver/nvidia`, `rocm-smi`, and related surfaces when present.
 - Captures command-missing/fallback markers and makes visibility limits explicit in reports.
+- Separates primary conclusions from investigative leads, forcing evidence-linked wording and keeping log loss, command pollution, and vulnerability exposure distinct from confirmed attacker actions.
 - Detects distro/kernel/package identity early so log locations and package evidence can be interpreted correctly.
 - Pivots to `wtmp`, `btmp`, `lastlog`, journald/rsyslog metadata, package history, shell traces, and `/proc/*/exe (deleted)` when primary logs are missing or tampered with.
 - Adds read-only local-privesc exposure review surfaces for recent sudo and kernel issues such as `CopyFail` and `DirtyFrag`, without running exploit validation.
@@ -66,10 +68,10 @@ You can add control constraints directly in plain language:
 
 ## Output Layout
 
-By default, case bundles are created under the current working directory:
+By default, the workflow creates a new case directory under the current working directory:
 
 ```text
-reports/
+./
 `-- <host-or-ip>-<utc-timestamp>/
     |-- artifacts/
     |-- evidence/
@@ -124,6 +126,7 @@ Roles of the main outputs:
 |-- references/
 |   |-- diagnostic-playbook.md
 |   |-- command-trust-verification.md
+|   |-- harness-discipline.md
 |   |-- log-loss-fallbacks.md
 |   |-- os-compatibility.md
 |   `-- skill-maintenance.md
@@ -156,6 +159,7 @@ Key files:
 - `scripts/generate_operator_brief.py`: novice-friendly operator summary.
 - `scripts/command_guard.py`: dangerous-command gating.
 - `references/`: playbooks, compatibility notes, fallback rules, maintenance guide.
+- `references/harness-discipline.md`: evidence-linking guardrails for weaker-model execution and noisy scenes.
 
 ## Installation
 

@@ -1,6 +1,6 @@
 # Live Evidence Collection
 
-Use this workflow to build a case bundle under `reports/<target>-<utc-time>/` with read-only commands.
+Use this workflow to build a case bundle under `./<target>-<utc-time>/` with read-only commands.
 
 ## Safety
 
@@ -67,23 +67,23 @@ python scripts/collect_live_evidence.py --remote <target_user>@<target_host> --d
 
 ## Output
 
-1. `reports/<target>-<utc-time>/evidence/evidence.raw.json`
-2. `reports/<target>-<utc-time>/artifacts/E-xxx.txt`
-3. `reports/<target>-<utc-time>/meta/case_manifest.json`
-4. `reports/<target>-<utc-time>/meta/artifact_hashes.json`
-5. `reports/<target>-<utc-time>/meta/case_validation.json`
-6. `reports/<target>-<utc-time>/meta/enrichment.local.json`
-7. `reports/<target>-<utc-time>/reports/` for final markdown report
+1. `<case>/evidence/evidence.raw.json`
+2. `<case>/artifacts/E-xxx.txt`
+3. `<case>/meta/case_manifest.json`
+4. `<case>/meta/artifact_hashes.json`
+5. `<case>/meta/case_validation.json`
+6. `<case>/meta/enrichment.local.json`
+7. `<case>/reports/` for final markdown report
 
 Then enrich + validate explicitly (recommended before manual export):
 
 ```bash
-python scripts/enrich_case_evidence.py --input reports/<case>/evidence/evidence.raw.json --output reports/<case>/evidence/evidence.reviewed.auto.json
-python scripts/validate_case_bundle.py --case-dir reports/<case> --input reports/<case>/evidence/evidence.reviewed.auto.json --strict
+python scripts/enrich_case_evidence.py --input <case>/evidence/evidence.raw.json --output <case>/evidence/evidence.reviewed.auto.json
+python scripts/validate_case_bundle.py --case-dir <case> --input <case>/evidence/evidence.reviewed.auto.json --strict
 ```
 
 Then export final report:
 
 ```bash
-python scripts/export_investigation_report.py --input reports/<case>/evidence/evidence.reviewed.auto.json --case-dir reports/<case> --redact --strict
+python scripts/export_investigation_report.py --input <case>/evidence/evidence.reviewed.auto.json --case-dir <case> --redact --strict
 ```

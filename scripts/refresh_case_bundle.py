@@ -117,7 +117,7 @@ def main() -> int:
         if args.redact:
             export_cmd.append('--redact')
         run_step('export_investigation_report', export_cmd)
-        print(f'[DONE] Report: {case_dir / "reports" / "report.md"}')
+        print(f'[DONE] Report: {case_dir / "report.md"}')
 
     return 0
 

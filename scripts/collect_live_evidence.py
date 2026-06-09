@@ -542,7 +542,6 @@ DEEP_READONLY_PROBES = [
         "else echo 'binary_hash_runtime_unavailable'; fi",
     ),
     Probe("process", "ls -l /proc/*/exe 2>/dev/null | grep ' (deleted)$' || true"),
-    Probe("service", RUNNING_SERVICES_CMD),
     Probe(
         "service",
         "systemctl list-units --type=service --state=running --no-legend --no-pager 2>/dev/null | awk '{print $1}' | head -n 40 | "
@@ -690,7 +689,7 @@ BASE_PROBES = BASE_PROBES + DEEP_READONLY_PROBES
 
 
 def default_case_root() -> str:
-    return str((Path.cwd() / "reports").resolve())
+    return str(Path.cwd().resolve())
 
 
 def now_utc() -> str:
@@ -735,7 +734,7 @@ def build_case_layout(args: argparse.Namespace) -> dict[str, Path]:
         case_dir = Path(args.case_dir).resolve()
     else:
         tag = args.case_tag or f"{target_label(args)}-{compact_utc()}"
-        case_root = Path(args.case_root).resolve() if args.case_root else (Path.cwd() / "reports").resolve()
+        case_root = Path(args.case_root).resolve() if args.case_root else Path.cwd().resolve()
         case_dir = case_root / sanitize_name(tag)
 
     evidence_dir = case_dir / "evidence"
@@ -1336,7 +1335,7 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, Any], list[str]]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect read-only live evidence into report schema JSON.")
     parser.add_argument("--output", help="Output evidence JSON file. Defaults to case_dir/evidence/evidence.raw.json.")
-    parser.add_argument("--case-root", default=default_case_root(), help="Root directory for case bundles. Defaults to <current working directory>/reports.")
+    parser.add_argument("--case-root", default=default_case_root(), help="Root directory for case bundles. Defaults to the current working directory; a new case folder is created under it.")
     parser.add_argument("--case-dir", help="Explicit case directory path.")
     parser.add_argument("--case-tag", help="Case folder tag, e.g. host-20260306-120000.")
     parser.add_argument("--incident-id", help="Incident ID. Auto-generated if omitted.")
@@ -1452,7 +1451,7 @@ def main() -> int:
                 "Recommended next steps:",
                 "1) Review evidence JSON and add evidence-backed findings.",
                 "2) Run case validation gate before final export.",
-                f"3) Export report to: {layout['reports_dir'] / 'report.md'}",
+                f"3) Export reports under: {layout['case_dir']}",
                 "4) Keep no-fabrication and redaction constraints enabled.",
             ]
         )

@@ -14,6 +14,7 @@ artifacts-INC-*/
 evidence*.json
 reports/*
 !reports/.gitkeep
+/*-20??????-??????/
 
 # Keep repository docs
 !README.md

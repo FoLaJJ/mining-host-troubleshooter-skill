@@ -164,7 +164,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Natural-language wrapper for run_readonly_workflow.py")
     parser.add_argument("--request", required=True, help="Natural-language request from user.")
     parser.add_argument("--analyst", default="unknown", help="Analyst name.")
-    parser.add_argument("--case-root", default=str((Path.cwd() / "reports").resolve()), help="Case root path.")
+    parser.add_argument("--case-root", default=str(Path.cwd().resolve()), help="Case root path. Defaults to the current working directory.")
     args = parser.parse_args()
 
     parsed = parse_request(args.request)

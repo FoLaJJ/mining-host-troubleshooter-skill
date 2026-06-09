@@ -10,7 +10,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 TRACE_STATUSES = {"traced", "untraceable", "unknown"}
@@ -451,6 +451,77 @@ def evidence_reference_list_zh_cn(
     )
 
 
+def render_compact_judgments_en(
+    items: list[dict[str, str]],
+    evid_idx: dict[str, dict[str, Any]],
+    case_dir: str | None,
+    maybe_redact: Callable[[str], str],
+    *,
+    empty_text: str,
+    heading_builder: Callable[[dict[str, str]], str],
+    include_hypothesis_line: bool,
+) -> list[str]:
+    if not items:
+        return [empty_text, ""]
+
+    lines: list[str] = []
+    for item in items:
+        evidence_ids = item["evidence_ids"].split(", ") if item["evidence_ids"] != "none" else []
+        lines.extend(
+            [
+                heading_builder(item),
+                f"- **Statement:** {maybe_redact(item['statement'])}",
+                f"- **Type / Status / Confidence:** `{claim_type_label(item['claim_type'])}` / `{item['status']}` / `{item['confidence']}`",
+            ]
+        )
+        if include_hypothesis_line:
+            lines.append(f"- **Hypothesis:** `{maybe_redact(item['hypothesis_id'])}`")
+        lines.extend(
+            [
+                f"- **Confidence Reason:** {maybe_redact(item['confidence_reason'])}",
+                f"- **Evidence Chain:** {compact_evidence_chain(evidence_ids, evid_idx, case_dir, limit=4, base_dir=Path(case_dir) / 'reports' if case_dir else None).replace('](#evidence-', '](../report.md#evidence-')}",
+                "",
+            ]
+        )
+    return lines
+
+
+def render_compact_judgments_zh_cn(
+    items: list[dict[str, str]],
+    evid_idx: dict[str, dict[str, Any]],
+    case_dir: str | None,
+    maybe_redact: Callable[[str], str],
+    maybe_redact_zh: Callable[[str], str],
+    *,
+    empty_text: str,
+    heading_builder: Callable[[dict[str, str]], str],
+    include_hypothesis_line: bool,
+) -> list[str]:
+    if not items:
+        return [empty_text, ""]
+
+    lines: list[str] = []
+    for item in items:
+        evidence_ids = item["evidence_ids"].split(", ") if item["evidence_ids"] != "none" else []
+        lines.extend(
+            [
+                heading_builder(item),
+                f"- **研判：** {maybe_redact_zh(item['statement'])}" if include_hypothesis_line else f"- **表述：** {maybe_redact_zh(item['statement'])}",
+                f"- **类型 / 状态 / 置信度：** `{ {'observed_fact':'观测事实','inference':'推断','attribution':'归因'}.get(normalize_claim_type(item['claim_type']), '推断') }` / `{ {'confirmed':'已确认','inconclusive':'待定'}.get(item['status'], item['status']) }` / `{ {'high':'高','medium':'中','low':'低','unknown':'未知'}.get(item['confidence'], item['confidence']) }`",
+            ]
+        )
+        if include_hypothesis_line:
+            lines.append(f"- **假设编号：** `{maybe_redact(item['hypothesis_id'])}`")
+        lines.extend(
+            [
+                f"- **置信度理由：** {maybe_redact_zh(item['confidence_reason'])}",
+                f"- **证据链：** {compact_evidence_chain_zh_cn(evidence_ids, evid_idx, case_dir, limit=4, base_dir=Path(case_dir) / 'reports' if case_dir else None).replace('](#evidence-', '](../report.zh-CN.md#evidence-')}",
+                "",
+            ]
+        )
+    return lines
+
+
 def build_management_view(data: dict[str, Any], redact: bool, case_dir: str | None = None) -> str:
     ctx = prepare_report_context(data, redact=redact, strict=False, case_dir=case_dir)
     incident = as_dict(data.get("incident"))
@@ -523,20 +594,17 @@ def build_management_view(data: dict[str, Any], redact: bool, case_dir: str | No
     if baseline_assessment:
         lines.append(f"- Baseline assessment: `{maybe_redact(str(baseline_assessment.get('assessment_status', 'unknown')))}`.")
     lines.extend(["", anchor_tag("mgmt-judgments"), "## Priority Judgments"])
-    if key_items:
-        for item in key_items:
-            evidence_ids = item['evidence_ids'].split(', ') if item['evidence_ids'] != 'none' else []
-            lines.extend([
-                f"### {status_icon(item['status'])} {item['id']}",
-                f"- **Judgment:** {maybe_redact(item['statement'])}",
-                f"- **Type / Status / Confidence:** `{claim_type_label(item['claim_type'])}` / `{item['status']}` / `{item['confidence']}`",
-                f"- **Hypothesis:** `{maybe_redact(item['hypothesis_id'])}`",
-                f"- **Confidence Reason:** {maybe_redact(item['confidence_reason'])}",
-                f"- **Evidence Chain:** {compact_evidence_chain(evidence_ids, evid_idx, case_dir, limit=4, base_dir=Path(case_dir) / 'reports' if case_dir else None).replace('](#evidence-', '](../report.md#evidence-')}",
-                "",
-            ])
-    else:
-        lines.extend(["- No evidence-backed judgments available yet.", ""])
+    lines.extend(
+        render_compact_judgments_en(
+            key_items,
+            evid_idx,
+            case_dir,
+            maybe_redact,
+            empty_text="- No evidence-backed judgments available yet.",
+            heading_builder=lambda item: f"### {status_icon(item['status'])} {item['id']}",
+            include_hypothesis_line=True,
+        )
+    )
     lines.extend([
         anchor_tag("mgmt-caveat"),
         "## Management Caveat",
@@ -642,20 +710,18 @@ def build_management_view_zh_cn(data: dict[str, Any], redact: bool, case_dir: st
     if baseline_assessment:
         lines.append(f"- 基线评估：`{maybe_redact(str(baseline_assessment.get('assessment_status', 'unknown')))}`。")
     lines.extend(["", anchor_tag("mgmt-judgments"), "## 优先研判"])
-    if key_items:
-        for item in key_items:
-            evidence_ids = item['evidence_ids'].split(', ') if item['evidence_ids'] != 'none' else []
-            lines.extend([
-                f"### {status_icon(item['status'])} {item['id']}",
-                f"- **研判：** {maybe_redact_zh(item['statement'])}",
-                f"- **类型 / 状态 / 置信度：** `{claim_type_label_zh_cn(item['claim_type'])}` / `{ {'confirmed':'已确认','inconclusive':'待定'}.get(item['status'], item['status']) }` / `{ {'high':'高','medium':'中','low':'低','unknown':'未知'}.get(item['confidence'], item['confidence']) }`",
-                f"- **假设编号：** `{maybe_redact(item['hypothesis_id'])}`",
-                f"- **置信度理由：** {maybe_redact_zh(item['confidence_reason'])}",
-                f"- **证据链：** {compact_evidence_chain_zh_cn(evidence_ids, evid_idx, case_dir, limit=4, base_dir=Path(case_dir) / 'reports' if case_dir else None).replace('](#evidence-', '](../report.zh-CN.md#evidence-')}",
-                "",
-            ])
-    else:
-        lines.extend(["- 当前暂无有证据支撑的优先研判。", ""])
+    lines.extend(
+        render_compact_judgments_zh_cn(
+            key_items,
+            evid_idx,
+            case_dir,
+            maybe_redact,
+            maybe_redact_zh,
+            empty_text="- 当前暂无有证据支撑的优先研判。",
+            heading_builder=lambda item: f"### {status_icon(item['status'])} {item['id']}",
+            include_hypothesis_line=True,
+        )
+    )
     lines.extend([
         anchor_tag("mgmt-caveat"),
         "## 管理提示",
@@ -736,19 +802,17 @@ def build_soc_view(data: dict[str, Any], redact: bool, case_dir: str | None = No
     append_sample_group(lines, "GPU Compute Process Samples", as_list(scene_reconstruction.get("gpu_compute_process_samples")), maybe_redact, limit=4, max_len=140)
     append_sample_group(lines, "GPU Suspicious Process Samples", as_list(scene_reconstruction.get("gpu_suspicious_process_samples")), maybe_redact, limit=4, max_len=140)
     lines.extend([anchor_tag("soc-judgments"), "## Key Judgments"])
-    if key_items:
-        for item in key_items:
-            evidence_ids = item['evidence_ids'].split(', ') if item['evidence_ids'] != 'none' else []
-            lines.extend([
-                f"### {status_icon(item['status'])} {item['id']} | `{item['hypothesis_id']}`",
-                f"- **Statement:** {maybe_redact(item['statement'])}",
-                f"- **Type / Status / Confidence:** `{claim_type_label(item['claim_type'])}` / `{item['status']}` / `{item['confidence']}`",
-                f"- **Confidence Reason:** {maybe_redact(item['confidence_reason'])}",
-                f"- **Evidence Chain:** {compact_evidence_chain(evidence_ids, evid_idx, case_dir, limit=4, base_dir=Path(case_dir) / 'reports' if case_dir else None).replace('](#evidence-', '](../report.md#evidence-')}",
-                "",
-            ])
-    else:
-        lines.extend(["- No evidence-backed judgments available yet.", ""])
+    lines.extend(
+        render_compact_judgments_en(
+            key_items,
+            evid_idx,
+            case_dir,
+            maybe_redact,
+            empty_text="- No evidence-backed judgments available yet.",
+            heading_builder=lambda item: f"### {status_icon(item['status'])} {item['id']} | `{item['hypothesis_id']}`",
+            include_hypothesis_line=False,
+        )
+    )
     lines.extend(["- [Back to Top](#soc-top) | [Bundle Index](./index.md) | [Full Report](../report.md)", ""])
     return "\n".join(lines).strip() + "\n"
 
@@ -769,13 +833,6 @@ def build_soc_view_zh_cn(data: dict[str, Any], redact: bool, case_dir: str | Non
 
     def maybe_redact_zh(value: str) -> str:
         return zh_report_text(value, redact)
-
-    def claim_type_label_zh_cn(value: str) -> str:
-        return {
-            "observed_fact": "观测事实",
-            "inference": "推断",
-            "attribution": "归因",
-        }.get(normalize_claim_type(value), "推断")
 
     lines = [anchor_tag("soc-top"), f"# {incident.get('title', 'Mining Host Investigation')} - SOC 摘要", ""]
     if case_dir:
@@ -846,19 +903,18 @@ def build_soc_view_zh_cn(data: dict[str, Any], redact: bool, case_dir: str | Non
     append_sample_group(lines, "GPU 计算进程样本", as_list(scene_reconstruction.get("gpu_compute_process_samples")), maybe_redact, limit=4, max_len=140, empty_label="无。")
     append_sample_group(lines, "GPU 可疑进程样本", as_list(scene_reconstruction.get("gpu_suspicious_process_samples")), maybe_redact, limit=4, max_len=140, empty_label="无。")
     lines.extend([anchor_tag("soc-judgments"), "## 关键研判"])
-    if key_items:
-        for item in key_items:
-            evidence_ids = item['evidence_ids'].split(', ') if item['evidence_ids'] != 'none' else []
-            lines.extend([
-                f"### {status_icon(item['status'])} {item['id']} · `{item['hypothesis_id']}`",
-                f"- **表述：** {maybe_redact_zh(item['statement'])}",
-                f"- **类型 / 状态 / 置信度：** `{claim_type_label_zh_cn(item['claim_type'])}` / `{ {'confirmed':'已确认','inconclusive':'待定'}.get(item['status'], item['status']) }` / `{ {'high':'高','medium':'中','low':'低','unknown':'未知'}.get(item['confidence'], item['confidence']) }`",
-                f"- **置信度理由：** {maybe_redact_zh(item['confidence_reason'])}",
-                f"- **证据链：** {compact_evidence_chain_zh_cn(evidence_ids, evid_idx, case_dir, limit=4, base_dir=Path(case_dir) / 'reports' if case_dir else None).replace('](#evidence-', '](../report.zh-CN.md#evidence-')}",
-                "",
-            ])
-    else:
-        lines.extend(["- 当前暂无有证据支撑的关键研判。", ""])
+    lines.extend(
+        render_compact_judgments_zh_cn(
+            key_items,
+            evid_idx,
+            case_dir,
+            maybe_redact,
+            maybe_redact_zh,
+            empty_text="- 当前暂无有证据支撑的关键研判。",
+            heading_builder=lambda item: f"### {status_icon(item['status'])} {item['id']} · `{item['hypothesis_id']}`",
+            include_hypothesis_line=False,
+        )
+    )
     lines.extend(["- [返回顶部](#soc-top) | [案件索引](./index.zh-CN.md) | [中文全量报告](../report.zh-CN.md)", ""])
     return "\n".join(lines).strip() + "\n"
 
@@ -2585,8 +2641,6 @@ def build_report(data: dict[str, Any], redact: bool, strict: bool, case_dir: str
     warnings = ctx["warnings"]
     contradiction_review = as_dict(ctx["contradiction_review"])
     environment_constraints = as_dict(ctx["environment_constraints"])
-    contradiction_review = as_dict(ctx["contradiction_review"])
-    environment_constraints = as_dict(ctx["environment_constraints"])
 
     lines: list[str] = [anchor_tag("report-top"), f"# {ctx['title']}", ""]
     if case_dir:
@@ -3513,6 +3567,15 @@ def write_companion_reports(case_dir: str | None, data: dict[str, Any], redact: 
     return written
 
 
+def report_output_targets(output_path: Path, case_dir: str | None) -> list[Path]:
+    targets: list[Path] = [output_path]
+    if case_dir:
+        canonical = Path(case_dir) / "report.md"
+        if canonical not in targets:
+            targets.append(canonical)
+    return targets
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Generate a fact-constrained investigation report."
@@ -3544,20 +3607,24 @@ def main() -> int:
         else:
             output_path = parent / "report.md"
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     data = load_json(input_path)
     derived_case_dir = args.case_dir
     if not derived_case_dir and input_path.resolve().parent.name == "evidence":
         derived_case_dir = str(input_path.resolve().parent.parent)
     report_md, warnings = build_report(data, redact=args.redact, strict=args.strict, case_dir=derived_case_dir)
-    output_path.write_text(report_md, encoding="utf-8")
+    written_report_paths: list[Path] = []
+    for report_path in report_output_targets(output_path, derived_case_dir):
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(report_md, encoding="utf-8")
+        written_report_paths.append(report_path)
     if derived_case_dir:
         legacy_report_path = Path(derived_case_dir) / "reports" / "report.md"
         if legacy_report_path.exists():
             legacy_report_path.unlink()
     companion_paths = write_companion_reports(derived_case_dir, data, redact=args.redact, strict=args.strict)
 
-    print(f"Report written: {output_path}")
+    for report_path in written_report_paths:
+        print(f"Report written: {report_path}")
     for companion in companion_paths:
         print(f"Companion report written: {companion}")
     print(f"Warnings: {len(warnings)}")

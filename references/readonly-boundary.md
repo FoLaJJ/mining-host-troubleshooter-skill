@@ -5,7 +5,7 @@ This skill defaults to evidence collection and reporting only.
 ## Allowed by Default
 
 1. Read commands, metadata inspection, hashing, version checks, log reading, process listing, socket listing, service metadata reading, config reading, and package-version inspection.
-2. Writing the local case bundle under `reports/<case>/`.
+2. Writing the local case bundle under `./<case>/`.
 3. Read-only vulnerability exposure checks based on kernel/package/config state.
 
 ## Not Allowed by Default

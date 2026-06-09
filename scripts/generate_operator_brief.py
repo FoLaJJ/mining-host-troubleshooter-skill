@@ -163,7 +163,7 @@ def build_zh_md(payload: dict[str, Any], expected_workload: str) -> str:
             "",
             "## 你接下来应该做什么",
             "1. 先看 `../report.zh-CN.md` 的“假设-证据关联矩阵”，确认哪些是假设已被证据支持。",
-            "2. 再看 `../reports/soc-summary.zh-CN.md`，按证据 ID 逐条复核关键线索。",
+            "2. 再看 `./soc-summary.zh-CN.md`，按证据 ID 逐条复核关键线索。",
             "3. 如需执行处置（停服务/杀进程/删文件），先做业务影响评估并单独审批。",
             "",
             "## 重要提醒",
@@ -201,7 +201,7 @@ def build_en_md(payload: dict[str, Any], expected_workload: str) -> str:
         "",
         "## Next Steps",
         "1. Review the hypothesis matrix in `../report.md` first.",
-        "2. Validate key evidence lines in `../reports/soc-summary.md` by evidence ID.",
+        "2. Validate key evidence lines in `./soc-summary.md` by evidence ID.",
         "3. Keep remediation actions approval-gated before any state change.",
         "",
     ]

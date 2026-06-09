@@ -59,25 +59,25 @@ Add `--allow-host-mismatch` only when cross-host comparison is deliberate or hos
 ```bash
 python scripts/collect_live_evidence.py   --remote <REMOTE_USER>@<HOST_IP>   --host-key-fingerprint "<SHA256_HOST_KEY_FINGERPRINT>"   --identity <SSH_KEY_PATH>   --analyst <ANALYST>   --host-name <HOST_NAME>   --host-ip <HOST_IP>   --os-hint "<OS_HINT>"   --mining-mode auto
 
-python scripts/enrich_case_evidence.py   --input reports/<case>/evidence/evidence.raw.json   --output reports/<case>/evidence/evidence.reviewed.auto.json
+python scripts/enrich_case_evidence.py   --input <case>/evidence/evidence.raw.json   --output <case>/evidence/evidence.reviewed.auto.json
 
-python scripts/validate_case_bundle.py   --case-dir reports/<case>   --input reports/<case>/evidence/evidence.reviewed.auto.json   --strict
+python scripts/validate_case_bundle.py   --case-dir <case>   --input <case>/evidence/evidence.reviewed.auto.json   --strict
 
-python scripts/apply_host_baseline.py   --case-dir reports/<case>   --baseline reports/_baselines/<host>-baseline-<timestamp>/baseline.json
+python scripts/apply_host_baseline.py   --case-dir <case>   --baseline reports/_baselines/<host>-baseline-<timestamp>/baseline.json
 
-python scripts/export_investigation_report.py   --input reports/<case>/evidence/evidence.reviewed.auto.json   --case-dir reports/<case>   --strict
+python scripts/export_investigation_report.py   --input <case>/evidence/evidence.reviewed.auto.json   --case-dir <case>   --strict
 ```
 
 ## Scenario 8: Refresh After Manual Review
 
 ```bash
-python scripts/refresh_case_bundle.py   --case-dir reports/<case>   --input reports/<case>/evidence/evidence.reviewed.json   --strict
+python scripts/refresh_case_bundle.py   --case-dir <case>   --input <case>/evidence/evidence.reviewed.json   --strict
 ```
 
 ## Scenario 9: External Sharing Copy
 
 ```bash
-python scripts/export_investigation_report.py   --input reports/<case>/evidence/evidence.reviewed.auto.json   --case-dir reports/<case>   --redact   --strict
+python scripts/export_investigation_report.py   --input <case>/evidence/evidence.reviewed.auto.json   --case-dir <case>   --redact   --strict
 ```
 
 ## Scenario 10: Manual Resume-Friendly Investigation
