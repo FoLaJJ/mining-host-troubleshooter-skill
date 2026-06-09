@@ -20,6 +20,33 @@ USER_RE = re.compile(r"(?:\busername\b|\buser\b|账号|用户名|用户)\s*[:：
 PASS_RE = re.compile(r"(?:\bpassword\b|\bpasswd\b|密码)\s*[:：]?\s*([^\s,，;；]+)", re.I)
 FINGERPRINT_RE = re.compile(r"\bSHA256:[A-Za-z0-9+/=]+\b")
 KEY_RE = re.compile(r"(?:\bidentity\b|\bkey\b|私钥|密钥)\s*[:：]?\s*([^\s,，;；]+)", re.I)
+MUTATION_RE = re.compile(r"(kill|stop|restart|reboot|shutdown|delete|remove|rm\b|truncate|disable|isolate|quarantine|隔离|删除|移除|停服|重启|杀进程)", re.I)
+
+FOCUS_RULES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"(被入侵|入侵|侵害|compromise|intrusion|attacker|攻击链|攻击路径|攻击手法)", re.I), "intrusion-review"),
+    (re.compile(r"(挖矿|矿工|miner|xmrig|lolminer|trex|gminer|nbminer)", re.I), "mining-review"),
+    (re.compile(r"(木马|后门|恶意程序|malware|trojan|backdoor)", re.I), "malware-review"),
+    (re.compile(r"(持久化|启动项|cron|service|systemd|autorun|persistence)", re.I), "persistence-review"),
+    (re.compile(r"(提权|sudo|copyfail|dirtyfrag|privilege escalation|lpe|local privesc)", re.I), "privilege-escalation-review"),
+    (re.compile(r"(横向|横移|lateral movement|pivot)", re.I), "lateral-movement-review"),
+    (re.compile(r"(日志|删日志|清日志|log tamper|log deletion|log loss)", re.I), "log-survivability-review"),
+    (re.compile(r"(容器|docker|k8s|kubernetes|cloud|云)", re.I), "container-cloud-review"),
+]
+
+
+def detect_focus(req: str) -> list[str]:
+    focus: list[str] = []
+    seen: set[str] = set()
+    for pattern, label in FOCUS_RULES:
+        if not pattern.search(req):
+            continue
+        if label in seen:
+            continue
+        seen.add(label)
+        focus.append(label)
+    if not focus:
+        focus.append("general-compromise-review")
+    return focus
 
 
 def parse_request(text: str) -> dict[str, Any]:
@@ -33,6 +60,8 @@ def parse_request(text: str) -> dict[str, Any]:
         "host_key_fingerprint": "",
         "mining_mode": "auto",
         "redact": False,
+        "focus": [],
+        "mutation_keywords_detected": False,
     }
     m = USER_HOST_RE.search(req)
     if m:
@@ -66,10 +95,12 @@ def parse_request(text: str) -> dict[str, Any]:
         out["mining_mode"] = "cpu"
     if "脱敏" in req or "redact" in lower:
         out["redact"] = True
+    out["focus"] = detect_focus(req)
+    out["mutation_keywords_detected"] = bool(MUTATION_RE.search(req))
     return out
 
 
-def build_command(parsed: dict[str, Any], analyst: str, case_root: str) -> tuple[list[str], dict[str, str]]:
+def build_command(parsed: dict[str, Any], analyst: str, case_root: str, request_summary: str) -> tuple[list[str], dict[str, str]]:
     script = Path(__file__).resolve().parent / "run_readonly_workflow.py"
     cmd = [
         sys.executable,
@@ -83,7 +114,11 @@ def build_command(parsed: dict[str, Any], analyst: str, case_root: str) -> tuple
         case_root,
         "--mining-mode",
         str(parsed.get("mining_mode", "auto")),
+        "--request-summary",
+        request_summary,
     ]
+    for focus in parsed.get("focus", []) or []:
+        cmd.extend(["--focus", str(focus)])
     if parsed.get("redact"):
         cmd.append("--redact")
 
@@ -117,6 +152,14 @@ def sanitize_parsed_for_log(parsed: dict[str, Any]) -> dict[str, Any]:
     return safe
 
 
+def sanitize_request_summary(request: str, parsed: dict[str, Any]) -> str:
+    text = " ".join((request or "").split())
+    password = str(parsed.get("password", "")).strip()
+    if password:
+        text = text.replace(password, "[REDACTED]")
+    return text[:800]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Natural-language wrapper for run_readonly_workflow.py")
     parser.add_argument("--request", required=True, help="Natural-language request from user.")
@@ -125,9 +168,13 @@ def main() -> int:
     args = parser.parse_args()
 
     parsed = parse_request(args.request)
-    cmd, env = build_command(parsed, args.analyst, args.case_root)
+    request_summary = sanitize_request_summary(args.request, parsed)
+    cmd, env = build_command(parsed, args.analyst, args.case_root, request_summary)
     print("[NL_PARSE]")
     print(json.dumps(sanitize_parsed_for_log(parsed), ensure_ascii=False, indent=2))
+    if parsed.get("mutation_keywords_detected"):
+        print("[NOTE]")
+        print("State-changing words were detected in the request, but this controller will still run read-only evidence collection only.")
     print("[RUN]")
     print(" ".join(cmd))
     proc = subprocess.run(cmd, env=env, check=False)

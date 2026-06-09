@@ -205,6 +205,140 @@ PACKAGE_HISTORY_CMD = (
     "/var/log/yum.log /var/log/pacman.log /var/log/zypper.log 2>/dev/null | tail -n 200 || true"
 )
 
+ENVIRONMENT_CONSTRAINTS_CMD = (
+    "echo '## resolv_conf'; sed -n '1,120p' /etc/resolv.conf 2>/dev/null || echo 'resolv_conf_unreadable'; "
+    "echo '## hosts_file'; sed -n '1,80p' /etc/hosts 2>/dev/null || echo 'hosts_file_unreadable'; "
+    "echo '## nsswitch'; grep -E '^(hosts|networks):' /etc/nsswitch.conf 2>/dev/null || echo 'nsswitch_unreadable'; "
+    "echo '## default_route'; "
+    "if [ -x /usr/sbin/ip ]; then /usr/sbin/ip route 2>/dev/null; "
+    "elif [ -x /sbin/ip ]; then /sbin/ip route 2>/dev/null; "
+    "elif command -v ip >/dev/null 2>&1; then ip route 2>/dev/null; "
+    "else echo 'ip_route_unavailable'; fi; "
+    "echo '## proc_net_route'; cat /proc/net/route 2>/dev/null || echo 'proc_net_route_unreadable'; "
+    "echo '## package_manager_paths'; "
+    "for p in /usr/bin/apt-get /usr/bin/dnf /usr/bin/yum /usr/bin/pacman /usr/bin/zypper; do "
+    "[ -x \"$p\" ] && echo \"$p\"; "
+    "done; "
+    "echo '## outbound_assessment'; "
+    "echo 'external_tool_download_required=no'; "
+    "echo 'external_tool_download_attempted=no'; "
+    "echo 'network_assessment_mode=passive_host_state_only'"
+)
+
+TRUST_RESOLUTION_STRUCTURED_CMD = (
+    "for c in ps ss ip journalctl systemctl last lastb sha256sum find grep awk sed; do "
+    "resolved=$(command -v \"$c\" 2>/dev/null || true); "
+    "real=''; "
+    "[ -n \"$resolved\" ] && real=$(readlink -f \"$resolved\" 2>/dev/null || echo \"$resolved\"); "
+    "echo \"cmd=$c|resolved=${resolved:-missing}|real=${real:-missing}\"; "
+    "for p in /usr/bin/$c /bin/$c /usr/sbin/$c /sbin/$c /usr/local/bin/$c; do "
+    "[ -e \"$p\" ] || continue; "
+    "preal=$(readlink -f \"$p\" 2>/dev/null || echo \"$p\"); "
+    "echo \"candidate=$c|path=$p|real=$preal\"; "
+    "done; "
+    "done"
+)
+
+PRIVESC_VERSION_CMD = (
+    "echo '## release'; cat /etc/os-release 2>/dev/null || true; "
+    "echo '## kernel'; uname -r 2>/dev/null || true; cat /proc/version 2>/dev/null | head -n 2 || true; "
+    "echo '## sudo_version'; sudo -V 2>/dev/null | head -n 40 || true; "
+    "echo '## package_versions'; "
+    "if command -v dpkg-query >/dev/null 2>&1; then "
+    "dpkg-query -W -f='${Package}=${Version}\\n' sudo kmod 2>/dev/null || true; "
+    "dpkg-query -W -f='${Package}=${Version}\\n' 'linux-image*' 2>/dev/null "
+    "| grep -E '^(linux-image|linux-modules|linux-generic|linux-hwe|linux-virtual|linux-aws|linux-azure|linux-gcp|linux-gke|linux-oracle|linux-raspi|linux-kvm|linux-nvidia|linux-ibm|linux-oem)' "
+    "| head -n 40 || true; "
+    "elif command -v rpm >/dev/null 2>&1; then "
+    "rpm -q sudo kmod kernel kernel-core kernel-modules 2>/dev/null || true; "
+    "elif command -v pacman >/dev/null 2>&1; then "
+    "pacman -Q sudo kmod linux linux-lts 2>/dev/null || true; "
+    "else echo 'pkg_query_unavailable'; fi"
+)
+
+PRIVESC_SURFACE_CMD = (
+    "echo '## userns'; "
+    "sysctl kernel.unprivileged_userns_clone user.max_user_namespaces kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || true; "
+    "echo '## modules'; "
+    "lsmod 2>/dev/null | grep -E '^(algif_aead|af_alg|esp4|esp6|rxrpc|xfrm_user|xfrm_algo)\\b' || true; "
+    "echo '## modprobe_rules'; "
+    "grep -RniE '(^|\\s)(blacklist|install)\\s+(algif_aead|af_alg|esp4|esp6|rxrpc)\\b' /etc/modprobe.d /usr/lib/modprobe.d /lib/modprobe.d 2>/dev/null | head -n 120 || true; "
+    "echo '## kernel_config'; "
+    "(zgrep -E 'CONFIG_USER_NS|CONFIG_AF_ALG|CONFIG_CRYPTO_USER_API_AEAD|CONFIG_XFRM|CONFIG_XFRM_ESPINTCP|CONFIG_RXRPC|CONFIG_BPF|CONFIG_BPF_SYSCALL' /proc/config.gz 2>/dev/null || "
+    "grep -E 'CONFIG_USER_NS|CONFIG_AF_ALG|CONFIG_CRYPTO_USER_API_AEAD|CONFIG_XFRM|CONFIG_XFRM_ESPINTCP|CONFIG_RXRPC|CONFIG_BPF|CONFIG_BPF_SYSCALL' /boot/config-$(uname -r) 2>/dev/null || true) "
+    "| head -n 160; "
+    "echo '## sudoers'; "
+    "grep -RniE '(CHROOT|CHDIR|Host_Alias|Runas_Alias|NOPASSWD|!authenticate)' /etc/sudoers /etc/sudoers.d 2>/dev/null | head -n 120 || true"
+)
+
+UBUNTU_PRIVESC_DETECTOR_CMD = (
+    "if [ -r /etc/os-release ]; then . /etc/os-release; fi; "
+    "echo '## ubuntu_detector'; "
+    "if [ \"${ID:-}\" = 'ubuntu' ] && command -v dpkg-query >/dev/null 2>&1 && command -v dpkg >/dev/null 2>&1; then "
+    "sudo_ver=$(dpkg-query -W -f='${Version}' sudo 2>/dev/null || true); "
+    "kernel_ver=$(uname -r 2>/dev/null || true); "
+    "kernel_pkg_ver=$(dpkg-query -W -f='${Version}' \"linux-image-$kernel_ver\" 2>/dev/null || dpkg-query -W -f='${Version}' \"linux-image-unsigned-$kernel_ver\" 2>/dev/null || true); "
+    "kmod_ver=$(dpkg-query -W -f='${Version}' kmod 2>/dev/null || true); "
+    "echo \"ubuntu.codename=${VERSION_CODENAME:-unknown}\"; "
+    "echo \"ubuntu.sudo_version=$sudo_ver\"; "
+    "echo \"ubuntu.kernel_version=$kernel_ver\"; "
+    "echo \"ubuntu.kernel_pkg_version=$kernel_pkg_ver\"; "
+    "echo \"ubuntu.kmod_version=$kmod_ver\"; "
+    "if [ -n \"$sudo_ver\" ]; then "
+    "case \"${VERSION_CODENAME:-}\" in "
+    "plucky) if dpkg --compare-versions \"$sudo_ver\" lt '1.9.16p2-1ubuntu1.1'; then echo 'detector:CVE-2025-32463=possibly_vulnerable'; else echo 'detector:CVE-2025-32463=fixed_or_newer'; fi ;; "
+    "oracular) if dpkg --compare-versions \"$sudo_ver\" lt '1.9.15p5-3ubuntu5.24.10.1'; then echo 'detector:CVE-2025-32463=possibly_vulnerable'; else echo 'detector:CVE-2025-32463=fixed_or_newer'; fi ;; "
+    "noble) if dpkg --compare-versions \"$sudo_ver\" lt '1.9.15p5-3ubuntu5.24.04.1'; then echo 'detector:CVE-2025-32463=possibly_vulnerable'; else echo 'detector:CVE-2025-32463=fixed_or_newer'; fi ;; "
+    "jammy|focal|bionic|xenial|trusty) echo 'detector:CVE-2025-32463=not_affected_by_ubuntu_status'; ;; "
+    "*) echo 'detector:CVE-2025-32463=unknown_release'; ;; "
+    "esac; "
+    "case \"${VERSION_CODENAME:-}\" in "
+    "plucky) if dpkg --compare-versions \"$sudo_ver\" lt '1.9.16p2-1ubuntu1.1'; then echo 'detector:CVE-2025-32462=possibly_vulnerable'; else echo 'detector:CVE-2025-32462=fixed_or_newer'; fi ;; "
+    "oracular) if dpkg --compare-versions \"$sudo_ver\" lt '1.9.15p5-3ubuntu5.24.10.1'; then echo 'detector:CVE-2025-32462=possibly_vulnerable'; else echo 'detector:CVE-2025-32462=fixed_or_newer'; fi ;; "
+    "noble) if dpkg --compare-versions \"$sudo_ver\" lt '1.9.15p5-3ubuntu5.24.04.1'; then echo 'detector:CVE-2025-32462=possibly_vulnerable'; else echo 'detector:CVE-2025-32462=fixed_or_newer'; fi ;; "
+    "jammy) if dpkg --compare-versions \"$sudo_ver\" lt '1.9.9-1ubuntu2.5'; then echo 'detector:CVE-2025-32462=possibly_vulnerable'; else echo 'detector:CVE-2025-32462=fixed_or_newer'; fi ;; "
+    "focal) if dpkg --compare-versions \"$sudo_ver\" lt '1.8.31-1ubuntu1.5+esm1'; then echo 'detector:CVE-2025-32462=possibly_vulnerable'; else echo 'detector:CVE-2025-32462=fixed_or_newer'; fi ;; "
+    "bionic) if dpkg --compare-versions \"$sudo_ver\" lt '1.8.21p2-3ubuntu1.6+esm1'; then echo 'detector:CVE-2025-32462=possibly_vulnerable'; else echo 'detector:CVE-2025-32462=fixed_or_newer'; fi ;; "
+    "xenial) if dpkg --compare-versions \"$sudo_ver\" lt '1.8.16-0ubuntu1.10+esm3'; then echo 'detector:CVE-2025-32462=possibly_vulnerable'; else echo 'detector:CVE-2025-32462=fixed_or_newer'; fi ;; "
+    "trusty) if dpkg --compare-versions \"$sudo_ver\" lt '1.8.9p5-1ubuntu1.5+esm8'; then echo 'detector:CVE-2025-32462=possibly_vulnerable'; else echo 'detector:CVE-2025-32462=fixed_or_newer'; fi ;; "
+    "*) echo 'detector:CVE-2025-32462=unknown_release'; ;; "
+    "esac; "
+    "else echo 'detector:sudo_pkg=unavailable'; fi; "
+    "if [ -n \"$kernel_ver\" ]; then "
+    "if [ \"${VERSION_CODENAME:-}\" = 'resolute' ]; then "
+    "echo 'detector:CVE-2026-31431=not_affected_by_ubuntu_status'; "
+    "echo 'detector:CVE-2026-43284=not_affected_by_ubuntu_status'; "
+    "echo 'detector:CVE-2026-43500=not_affected_by_ubuntu_status'; "
+    "elif [ -z \"$kernel_pkg_ver\" ]; then "
+    "echo 'detector:CVE-2026-31431=manual_package_review_required'; "
+    "echo 'detector:CVE-2026-43284=manual_package_review_required'; "
+    "echo 'detector:CVE-2026-43500=manual_package_review_required'; "
+    "elif echo \"$kernel_ver\" | grep -q -- '-generic$'; then "
+    "if echo \"$kernel_ver\" | grep -Eq '^6\\.17\\.'; then "
+    "if dpkg --compare-versions \"$kernel_pkg_ver\" lt '6.17.0-29.29'; then echo 'detector:CVE-2026-31431=possibly_vulnerable'; else echo 'detector:CVE-2026-31431=fixed_or_newer'; fi; "
+    "if dpkg --compare-versions \"$kernel_pkg_ver\" lt '6.17.0-35.35'; then echo 'detector:CVE-2026-43284=possibly_vulnerable'; echo 'detector:CVE-2026-43500=possibly_vulnerable'; else echo 'detector:CVE-2026-43284=fixed_or_newer'; echo 'detector:CVE-2026-43500=fixed_or_newer'; fi; "
+    "elif echo \"$kernel_ver\" | grep -Eq '^6\\.8\\.'; then "
+    "if dpkg --compare-versions \"$kernel_pkg_ver\" lt '6.8.0-117.117'; then echo 'detector:CVE-2026-31431=possibly_vulnerable'; else echo 'detector:CVE-2026-31431=fixed_or_newer'; fi; "
+    "if dpkg --compare-versions \"$kernel_pkg_ver\" lt '6.8.0-124.124'; then echo 'detector:CVE-2026-43284=possibly_vulnerable'; echo 'detector:CVE-2026-43500=possibly_vulnerable'; else echo 'detector:CVE-2026-43284=fixed_or_newer'; echo 'detector:CVE-2026-43500=fixed_or_newer'; fi; "
+    "elif echo \"$kernel_ver\" | grep -Eq '^5\\.15\\.'; then "
+    "if dpkg --compare-versions \"$kernel_pkg_ver\" lt '5.15.0-179.189'; then echo 'detector:CVE-2026-31431=possibly_vulnerable'; else echo 'detector:CVE-2026-31431=fixed_or_newer'; fi; "
+    "if dpkg --compare-versions \"$kernel_pkg_ver\" lt '5.15.0-181.191'; then echo 'detector:CVE-2026-43284=possibly_vulnerable'; echo 'detector:CVE-2026-43500=possibly_vulnerable'; else echo 'detector:CVE-2026-43284=fixed_or_newer'; echo 'detector:CVE-2026-43500=fixed_or_newer'; fi; "
+    "elif echo \"$kernel_ver\" | grep -Eq '^5\\.4\\.'; then "
+    "if dpkg --compare-versions \"$kernel_pkg_ver\" lt '5.4.0-230.250'; then echo 'detector:CVE-2026-31431=possibly_vulnerable'; else echo 'detector:CVE-2026-31431=fixed_or_newer'; fi; "
+    "if dpkg --compare-versions \"$kernel_pkg_ver\" lt '5.4.0-231.251'; then echo 'detector:CVE-2026-43284=possibly_vulnerable'; echo 'detector:CVE-2026-43500=possibly_vulnerable'; else echo 'detector:CVE-2026-43284=fixed_or_newer'; echo 'detector:CVE-2026-43500=fixed_or_newer'; fi; "
+    "elif echo \"$kernel_ver\" | grep -Eq '^4\\.15\\.'; then "
+    "if dpkg --compare-versions \"$kernel_pkg_ver\" lt '4.15.0-250.262'; then echo 'detector:CVE-2026-31431=possibly_vulnerable'; else echo 'detector:CVE-2026-31431=fixed_or_newer'; fi; "
+    "if dpkg --compare-versions \"$kernel_pkg_ver\" lt '4.15.0-251.263'; then echo 'detector:CVE-2026-43284=possibly_vulnerable'; echo 'detector:CVE-2026-43500=possibly_vulnerable'; else echo 'detector:CVE-2026-43284=fixed_or_newer'; echo 'detector:CVE-2026-43500=fixed_or_newer'; fi; "
+    "else echo 'detector:CVE-2026-31431=unknown_generic_branch'; echo 'detector:CVE-2026-43284=unknown_generic_branch'; echo 'detector:CVE-2026-43500=unknown_generic_branch'; fi; "
+    "else "
+    "echo 'detector:CVE-2026-31431=manual_flavor_review_required'; "
+    "echo 'detector:CVE-2026-43284=manual_flavor_review_required'; "
+    "echo 'detector:CVE-2026-43500=manual_flavor_review_required'; "
+    "fi; "
+    "fi; "
+    "else echo 'detector:ubuntu_package_status=unsupported_family'; fi"
+)
+
 
 def command_hash(command: str) -> str:
     return hashlib.sha256(command.encode("utf-8", errors="replace")).hexdigest()
@@ -215,6 +349,7 @@ BASE_PROBES = [
     Probe("system", "uptime; who -b"),
     Probe("system", "free -h; df -hT"),
     Probe("privilege", "id; whoami; sudo -n -l 2>/dev/null | head -n 80 || true"),
+    Probe("environment", ENVIRONMENT_CONSTRAINTS_CMD),
     Probe(
         "trust",
         "echo \"PATH=$PATH\"; "
@@ -238,6 +373,7 @@ BASE_PROBES = [
         "done; "
         "else echo 'sha256sum unavailable'; fi",
     ),
+    Probe("trust", TRUST_RESOLUTION_STRUCTURED_CMD),
     Probe("network", NETWORK_IDENTITY_CMD),
     Probe("network", SOCKETS_CMD),
     Probe("process", PROCESS_TOP_CMD),
@@ -355,6 +491,9 @@ BASE_PROBES = [
     Probe("log_integrity", "find /var/log -maxdepth 2 -type l -printf '%p -> %l\\n' 2>/dev/null | sort || true"),
     Probe("log_integrity", LOG_PIPELINE_CMD),
     Probe("log_integrity", PACKAGE_HISTORY_CMD),
+    Probe("vuln_exposure", PRIVESC_VERSION_CMD),
+    Probe("vuln_exposure", PRIVESC_SURFACE_CMD),
+    Probe("vuln_exposure", UBUNTU_PRIVESC_DETECTOR_CMD),
 ]
 
 DEEP_READONLY_PROBES = [
@@ -564,6 +703,21 @@ def compact_utc() -> str:
 
 def sanitize_name(raw: str) -> str:
     return re.sub(r"[^a-zA-Z0-9._-]+", "-", raw.strip())[:80] or "host"
+
+
+def normalize_focus_list(values: list[str] | None) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in values or []:
+        for part in str(raw).split(","):
+            item = re.sub(r"[^a-z0-9._-]+", "-", part.strip().lower()).strip("-")
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            out.append(item)
+    if not out:
+        out.append("general-compromise-review")
+    return out
 
 
 def target_label(args: argparse.Namespace) -> str:
@@ -1030,6 +1184,7 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, Any], list[str]]:
     evidence: list[dict[str, Any]] = []
     log_integrity: list[dict[str, Any]] = []
     unknowns: list[str] = []
+    requested_focus = normalize_focus_list(getattr(args, "focus", []))
 
     incident_id = args.incident_id or f"INC-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6]}"
     artifacts_dir = Path(args.artifacts_dir).resolve()
@@ -1118,7 +1273,7 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, Any], list[str]]:
         host_name = args.host_name or (args.remote.split("@")[-1] if args.remote else platform.node() or "local-host")
         host_ip = args.host_ip or ("unknown-remote" if args.remote else "127.0.0.1")
         summary = (
-            "Auto-collected read-only evidence snapshot. Analyst review required. "
+            f"Auto-collected read-only evidence snapshot for {', '.join(requested_focus) or 'general compromise review'}. Analyst review required. "
             "No findings are asserted without explicit evidence linkage."
         )
 
@@ -1134,7 +1289,19 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, Any], list[str]]:
             "report_timezone_basis": "UTC",
             "timezone": "UTC",
             "timezone_semantics": "Report normalization basis only; not the host local timezone.",
+            "collection_constraints": {
+                "readonly_only": True,
+                "external_tool_download_required": False,
+                "external_tool_download_attempted": False,
+                "network_assessment_mode": "passive_host_state_only",
+            },
             "expected_workload": (args.expected_workload or "").strip(),
+            "investigation_scope": {
+                "requested_focus": requested_focus,
+                "request_summary": str(getattr(args, "request_summary", "") or "").strip(),
+                "readonly_only": True,
+                "state_change_allowed": False,
+            },
             "remote_trust": trust_info,
             "incident": {
                 "id": incident_id,
@@ -1180,6 +1347,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--os-hint", help="OS hint (e.g., Ubuntu 22.04).")
     parser.add_argument("--mining-mode", choices=["auto", "gpu", "cpu", "mixed"], default="auto")
     parser.add_argument("--expected-workload", help="Declared legitimate high-compute workload for false-positive control.")
+    parser.add_argument("--focus", action="append", help="Requested investigation focus, repeatable or comma-separated.")
+    parser.add_argument("--request-summary", help="Sanitized user request summary recorded in case metadata.")
     parser.add_argument("--remote", help="Remote target in user@host format. If omitted, collect locally.")
     parser.add_argument("--port", type=int, help="SSH port.")
     parser.add_argument("--identity", help="SSH private key path.")
@@ -1264,6 +1433,7 @@ def main() -> int:
         "remote_trust": payload.get("remote_trust", {}),
         "notes": [
             "All commands are read-only probes.",
+            f"Requested investigation focus: {', '.join(normalize_focus_list(getattr(args, 'focus', []))) or 'general-compromise-review'}.",
             "Add analyst-reviewed findings before final report export.",
             "Verify artifact integrity with meta/artifact_hashes.json before external transfer.",
         ],

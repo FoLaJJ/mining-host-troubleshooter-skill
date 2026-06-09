@@ -2,6 +2,8 @@
 
 This policy enforces business-host safety for the `mining-host-troubleshooter` skill.
 
+Default posture: investigation only. Read-only evidence collection is the normal mode. Change commands are outside the default workflow even when the user mentions them in the same request.
+
 ## Risk Levels
 
 ## `read_only`
@@ -9,6 +11,7 @@ This policy enforces business-host safety for the `mining-host-troubleshooter` s
 - Purpose: observation, evidence gathering, and integrity verification.
 - Approval: not required.
 - Expected effect: no intended system state change.
+- Investigation value: preserve scene while gathering the evidence needed to reconstruct what happened.
 
 Examples:
 
@@ -82,6 +85,15 @@ Use this template before a `confirm_required` command:
 6. Rollback plan:
 7. Expected disruption window:
 8. `Reply approve to continue or cancel.`
+
+## Mixed-Intent Rule
+
+If the user asks to both investigate and remediate in the same turn:
+
+1. stay in `read_only` mode for the current investigation
+2. finish evidence collection and reporting first
+3. list the requested remediation as a separate follow-up action
+4. require explicit approval before crossing into any `confirm_required` or `blocked` path
 
 ## Rollback Discipline
 

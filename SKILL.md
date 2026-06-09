@@ -1,236 +1,186 @@
 ---
 name: mining-host-troubleshooter
-description: "Diagnose suspected Linux mining compromise or miner-like abuse on local or remote hosts. Use for read-only triage, scene reconstruction, persistence review, command-trust verification, same-host baseline comparison, and evidence-bound reporting. Allow unrestricted read-only inspection, require explicit user confirmation before any state-changing action, keep traceability values visible by default for internal work, and never fabricate findings or attribution."
+description: "Use when a Linux host may be compromised, running a miner, hiding persistence, or showing signs of local privilege escalation. Supports read-only evidence collection, distro-aware triage, deleted-log fallback review, detailed evidence correlation, and evidence-bound reporting. Default to read-only investigation only, keep state-changing actions out of scope unless the user explicitly approves them as a separate step, and never fabricate findings or attribution."
 ---
 
 # Mining Host Troubleshooter
 
-## Mission
+## Operating Contract
 
-Use this skill when a Linux host may be affected by CPU mining, GPU mining, disguised miner services, persistence abuse, or related compromise.
+Use this skill for Linux host compromise triage, mining-malware review, intrusion reconstruction, persistence review, and read-only local-privilege-escalation exposure assessment.
 
-Primary goals:
-
-1. Preserve scene and minimize impact.
-2. Collect read-only evidence first.
-3. Reconstruct what happened from evidence only.
-4. Trace source IPs and execution paths when the evidence supports it.
-5. Normalize time references before drawing timeline conclusions.
-6. Export concise, layered, traceable reports.
+This skill is an investigation skill, not a remediation skill.
 
 ## Hard Rules
 
-1. Never fabricate facts, timelines, attribution, or command outputs.
-2. If evidence is insufficient, say `inconclusive`.
-3. Read-only commands are allowed by default.
-4. Any state-changing command requires explicit user approval first.
-5. Before requesting approval, explain purpose, impact, risk, rollback, and whether the action is `reversible_change`, `irreversible_change`, or `business_interruption`.
-6. Never auto-delete files, kill processes, disable services, edit configs, rotate logs, or reboot.
-7. Always protect secrets such as passwords, private keys, tokens, and wallet credentials. Never pass secrets on the command line when a safer path exists.
-8. Internal reports keep traceability values such as IPs visible by default, but passwords, tokens, and private-key material must still be redacted.
+1. Default mode is `read_only_evidence_collection`.
+2. Read-only commands are allowed by default.
+3. State-changing actions are out of scope unless the user explicitly authorizes a separate change step after evidence collection.
+4. Never auto-delete files, kill processes, stop services, edit configs, rotate logs, quarantine hosts, reboot systems, install packages, or clean artifacts.
+5. If the user asks for kill/stop/delete/restart/remediation, keep the workflow read-only and record those requests as approval-gated follow-up actions instead of executing them.
+6. Never fabricate facts, command output, timelines, attacker behavior, or attribution.
+7. If evidence is insufficient, say `inconclusive`.
+8. Distinguish every key conclusion as `observed_fact`, `inference`, or `attribution`, and include a confidence reason.
+9. Keep traceable IPs visible in internal reports unless the user asks for redaction.
+10. Protect passwords, tokens, private keys, and wallet secrets. Redact them even in internal notes when full value disclosure is not necessary.
 
-## Example Anchoring Rules
+## Scope Control
 
-Treat example values in this skill and its bundled references as placeholders unless the user or live evidence says otherwise.
+At the start of the run, bind the investigation to the user's requested focus. Supported focus examples include:
 
-1. Placeholder examples such as `<HOST_IP>`, `<REMOTE_USER>`, `<SSH_KEY_PATH>`, `<CASE_DIR>`, and `<SERVICE_PATH>` are templates only.
-2. Do not infer a host IP, username, service name, path, or container name from README or reference examples.
-3. Linux evidence paths inside scripts, such as `/var/log/...`, `/etc/systemd/...`, `/proc/...`, are intentional evidence targets, not case-specific conclusions.
-4. Every conclusion must come from the current machine, current case bundle, or user-supplied facts.
+1. `intrusion-review`
+2. `mining-review`
+3. `malware-review`
+4. `persistence-review`
+5. `privilege-escalation-review`
+6. `log-survivability-review`
+7. `container-cloud-review`
+8. `lateral-movement-review`
 
+If the user asks for one narrow goal such as "only check whether it was breached", "only check mining malware", or "only assess sudo/CopyFail/DirtyFrag exposure", keep that focus visible in the case bundle and report, but still preserve the same read-only contract.
 
-## LLM Execution Guardrails
+## Required Run Order
 
-1. If the automated Python workflow cannot run, immediately switch to shell fallback and state `[MODE: SHELL_FALLBACK]`.
-2. At the beginning of a manual run, state `[PRIVILEGE: restricted|user|sudo|root]` based on the actual session.
-3. After each major phase, emit `[CHECKPOINT: <stage>]` so the investigation can resume after interruption.
-4. Use explicit low-confidence markers. Preferred forms:
-   - `[CONFIRMED: ...]` for evidence-backed conclusions
-   - `[INCONCLUSIVE: ...]` when evidence is partial or insufficient
-   - `[OCR-UNCERTAIN: ...]` when screenshot or image interpretation is not fully reliable
-5. If the host only allows partial visibility, say so directly and narrow the scope instead of guessing.
-6. When user-supplied screenshots, logs, or config snippets are used, label them as user-supplied evidence and do not infer hidden content.
-7. Separate every conclusion into `observed_fact`, `inference`, or `attribution`, and attach a confidence label plus confidence reason.
-8. If high compute is seen without direct miner evidence, keep the result inconclusive unless the declared legitimate workload is verified by runtime evidence.
-
-## Access Modes
-
-Support the safest available access path:
-
-1. Local shell on the target host.
-2. SSH with private key file.
-3. SSH with agent-loaded key.
-4. SSH with username and password.
-5. SSH via jump host.
-6. Platform console access.
-7. Shortcut remote input with `--remote-user <USER> --remote-ip <IP>` in `run_readonly_workflow.py`.
-
-Before connecting remotely, confirm:
-
-1. Host identity.
-2. Trusted host-key source: existing `known_hosts` entry or out-of-band fingerprint.
-3. Auth method. Prefer SSH key or agent-loaded key; if password auth is unavoidable, use environment-variable input or a secure prompt instead of command-line plaintext.
-4. Whether sudo is allowed.
-5. Whether the host is business-critical.
-6. Whether change operations are forbidden unless explicitly approved.
-
-Use [references/login-methods.md](references/login-methods.md) only when you need concrete connection examples.
-
-## Workflow
-
-Follow this order unless the user gives a narrower scope:
-
-1. Scope the case.
-   - Confirm symptom, time window, host role, blast radius, and mining mode: `cpu`, `gpu`, `mixed`, or `unknown`.
-2. Preserve scene.
-   - Avoid restarts, config edits, cleanup, and log rotation until read-only capture is complete.
-3. Trust bootstrap and verify environment trust.
-   - Confirm host-key trust first. Reject unknown host keys by default unless an explicit out-of-band fingerprint is provided. For urgent first-time internal triage, `--trust-on-first-use` is available and must be recorded in the report as weaker trust bootstrap. Then check distro family, package manager family, actual privilege level, command path trust, alias/function wrapping, and missing-command fallbacks such as `ss -> netstat -> lsof -> /proc/net` or `ps -> /proc`.
+1. Confirm scope, host criticality, and whether change operations are forbidden.
+2. Establish trust bootstrap for remote access.
+3. Detect distro and version first.
+   - First host-side collection priority is distro/kernel identity such as `/etc/os-release`, `uname -a`, `uname -r`, package-manager family, and actual privilege level.
 4. Collect read-only evidence.
-   - Prefer the bundled workflow scripts and case-bundle layout under `./reports/`.
-   - If Python or bundled scripts are unavailable, switch to the manual shell-only fallback flow.
-5. Check log survivability.
-   - Detect missing logs, null-routing, suspicious links, and fallback to `wtmp`, `btmp`, `lastlog`, journald/rsyslog configuration, service/timer metadata, package-manager history, shell traces such as `.wget-hsts` or `.lesshst`, `/proc/*/exe (deleted)`, and other surviving artifacts.
-6. Review execution and persistence.
-   - Check processes, deleted-on-disk executables, service `ExecStart`, user startup items, shell histories, suspicious drop paths, network listeners, containers, preload hooks, PAM, sudoers, keys, modules, and eBPF where visible.
-7. Review initial access and cloud/container paths.
-   - Check weak-credential evidence, SSH key surfaces, metadata-service traces, Docker, Kubernetes, cloud-init, CI/CD clues, and supply-chain indicators when visible.
-8. Reconstruct the scene.
-   - Build findings, normalized timeline, IP traceability, and a hypothesis matrix (`hypothesis -> supporting evidence -> counter evidence -> status`) only from evidence.
-9. Compare against history when available.
-   - Use same-host case diffing and same-host clean baselines to suppress repeated normal patterns.
-10. Export the report.
-   - Keep it concise, evidence-bound, explicit about gaps, and always produce the standalone leadership report in both languages.
+5. If primary logs are missing, pivot immediately to fallback evidence instead of guessing.
+6. Reconstruct attacker activity, persistence, runtime behavior, and traceability from evidence only.
+7. Export concise but detailed reports.
 
-## Preferred Automation Path
+## Distro and Platform Rules
 
-For most investigations, prefer the bundled workflow and state `[MODE: AUTOMATED_WORKFLOW]`:
+1. Detect the actual Linux family before interpreting logs or package state.
+2. Use distro-aware log expectations:
+   - Ubuntu/Debian commonly use `/var/log/auth.log` and `/var/log/syslog`
+   - RHEL/CentOS/Rocky/Alma commonly use `/var/log/secure` and `/var/log/messages`
+   - systemd environments may rely heavily on `journalctl`
+3. If the expected log path is missing, do not treat that alone as compromise. Check whether the host uses a different logging layout first.
+4. If the expected log path should exist for that distro and is missing, null-routed, empty, or suspicious, mark log survivability risk and pivot to fallback artifacts.
+
+Use [references/os-compatibility.md](references/os-compatibility.md) when distro-specific command fallbacks are needed.
+
+## Deleted or Missing Log Rules
+
+If logs are missing, deleted, empty, or suspicious:
+
+1. Check `wtmp`, `btmp`, `lastlog`, journald metadata, rsyslog/journald configuration, service metadata, timer metadata, package-manager history, shell traces, and `/proc/*/exe (deleted)`.
+2. Record exactly which primary log artifacts are missing or unreliable.
+3. Downgrade confidence when fallback evidence is the only remaining source.
+4. Never "repair" logging during the investigation phase.
+
+Use [references/log-loss-fallbacks.md](references/log-loss-fallbacks.md) for the fallback matrix.
+
+## Detailed Evidence Correlation Rules
+
+Correlation must be specific. Pay attention to small differences such as:
+
+1. Different parent PID or `ExecStart` path for otherwise similar processes.
+2. Same binary name but different executable path, hash, owner, or startup method.
+3. New pool, wallet, proxy, algorithm, CPU-thread count, or GPU process mapping.
+4. Slightly different authorized key material, sudoers lines, PAM hooks, preload entries, cron schedules, or service unit fragments.
+5. Differences between same-host historical cases and current case data.
+6. Differences between what the distro normally exposes and what this host now shows.
+
+Do not summarize too early. Preserve the concrete evidence IDs, runtime profile fields, file paths, hashes, and support/counter-evidence links.
+
+## Local Privilege-Escalation Review
+
+This skill may assess local privilege-escalation exposure only in a read-only way.
+
+Allowed:
+
+1. Read kernel version, distro version, package versions, loaded modules, sysctl exposure, sudo version, and sudoers/PAM-related review surfaces.
+2. Compare observed Ubuntu package/kernel versions against bundled detector logic for recent issues such as:
+   - `CVE-2025-32462`
+   - `CVE-2025-32463`
+   - `CVE-2026-31431` (`CopyFail`)
+   - `CVE-2026-43284`
+   - `CVE-2026-43500` (`DirtyFrag` family review in this skill)
+3. State that a local privesc path is plausible only when exposure indicators and surrounding evidence support that hypothesis.
+
+Forbidden:
+
+1. Running exploit code
+2. Running crashy proof-of-concept checks
+3. Changing kernel parameters
+4. Installing diagnostic packages without approval
+
+If vulnerable package/kernel status is observed and the case also shows signs of user-level access followed by root-scope effects, it is reasonable to mark `local privilege escalation plausible`, but not `confirmed` without stronger evidence.
+
+## Automation Path
+
+Prefer:
 
 ```bash
 python scripts/run_readonly_workflow.py ...
 ```
 
-When the user directly provides IP, username, and password, use the shortcut remote form (prefer env-based password input):
+Natural-language entry is allowed through:
 
 ```bash
-python scripts/run_readonly_workflow.py --remote-user <USER> --remote-ip <IP> --password-env <ENV_VAR> --trust-on-first-use ...
+python scripts/nl_control.py --request "<user request>"
 ```
 
-Behavior:
+The workflow should:
 
-1. Performs trust bootstrap for remote collection using `known_hosts` or a pinned fingerprint.
-2. Writes the case bundle under the current working directory in `./reports/<case>/` by default.
-3. Performs low-impact read-only collection with per-probe timeouts.
-4. Enriches evidence and reconstructs scene.
-   - Includes GPU-aware correlation: GPU adapters, utilization, GPU compute-process mapping, and suspicious PID/keyword correlation when available.
-5. Validates the case bundle.
-6. Optionally applies a same-host clean baseline when `--baseline <BASELINE_JSON>` is provided.
-7. Exports a fixed report set: `leadership-report.md`, `leadership-report.zh-CN.md`, `report.md`, `report.zh-CN.md`, `reports/index.md`, `reports/index.zh-CN.md`, `reports/management-summary.md`, `reports/management-summary.zh-CN.md`, `reports/soc-summary.md`, `reports/soc-summary.zh-CN.md`, `reports/operator-brief.md`, `reports/operator-brief.zh-CN.md`, `reports/operator-brief.json`, `reports/external-evidence-checklist.md`, and `meta/report-manifest.json`. The leadership reports are standalone review artifacts; the full reports keep evidence navigation, fixed anchors, and artifact links.
-8. Accepts operator-friendly remote shortcut input: `--remote-user <USER> --remote-ip <IP>` with password env/prompt, and optional `--trust-on-first-use` for first-seen hosts.
-9. Treats missing required outputs as workflow failure. A partial report set must not be presented as successful completion.
-
-If the user wants staged control, use these scripts separately:
-
-1. `scripts/collect_live_evidence.py`
-2. `scripts/enrich_case_evidence.py`
-3. `scripts/validate_case_bundle.py`
-4. `scripts/apply_host_baseline.py`
-5. `scripts/export_investigation_report.py`
-6. `scripts/compare_case_bundles.py`
-7. `scripts/refresh_case_bundle.py`
-8. `scripts/generate_operator_brief.py`
-9. `scripts/nl_control.py`
-
-## Same-Host Baseline Rules
-
-Use baselines only as suppression and comparison aids.
-
-1. Build baselines from repeated known-clean cases of the same host.
-2. Apply baselines only when same-host scope is supported by host IP, host name, or deliberate analyst choice.
-3. A baseline match does not prove the host is clean.
-4. A weak or single-case baseline must never be used as the sole reason to clear a host, suppress an incident, or whitelist future behavior.
-5. Similar hosts in the same business role, such as another honeypot node or another cloud VM, may be used only as role-reference context and must not be treated as a same-host clean baseline.
-6. Keep enriching same-host baselines over time with additional known-clean cases; baseline quality is mutable and should improve with evidence depth.
-7. New values, new execution paths, new source IPs, trust anomalies, or persistence drift must still be reviewed.
-
-Use:
-
-1. `scripts/generate_host_baseline.py`
-2. `scripts/apply_host_baseline.py`
-
-## Dangerous Command Gate
-
-Ask before any command that can:
-
-1. Delete, overwrite, truncate, or move files.
-2. Kill processes or stop services.
-3. Edit unit files, crontabs, shell profiles, startup items, firewall rules, routes, or user accounts.
-4. Install, remove, or upgrade packages.
-5. Flush logs, alter audit state, or modify evidence.
-6. Reboot or otherwise disrupt service.
-
-If a user approves such a command, state:
-
-1. Why it is needed.
-2. What may break.
-3. What evidence may be lost.
-4. How to roll back, if rollback exists.
-
-Use [references/risk-command-policy.md](references/risk-command-policy.md) and `scripts/command_guard.py` when needed.
-
-## Evidence Integrity Requirements
-
-1. Preserve or generate artifact hashes whenever the workflow can write a case bundle.
-2. If hashes or validation output are unavailable, say so explicitly instead of implying a complete evidence chain.
-3. When citing a critical artifact, prefer including its evidence ID and, when available, its artifact path or hash context from the case bundle.
-4. Treat user-pasted snippets and screenshots as separate from live shell artifacts.
+1. Keep the run read-only.
+2. Record requested focus in the case bundle.
+3. Detect distro, privilege level, and trust state early.
+4. Collect detailed evidence, including vulnerability-exposure review surfaces.
+5. Enrich evidence into timeline, runtime profiles, hypothesis matrix, file/hash correlation, and privesc plausibility notes.
+6. Export full and leadership reports.
 
 ## Reporting Standard
 
-Every final output should include:
+Every final report should include:
 
-1. Scope and observation window.
-2. Evidence-backed findings.
-3. Timeline with normalized UTC when available.
-4. IP traceability status.
-5. Log survivability status.
-6. Unknowns and evidence gaps.
-7. Approval-gated actions, if any.
-8. Clear statement of confirmed vs inconclusive items.
-9. Claim type (`observed_fact` / `inference` / `attribution`) and confidence reason for each key conclusion.
-10. False-positive control note when high compute might be legitimate.
-11. A standalone leadership report in both languages that can be read without evidence jumps and that covers suspected ingress path, earliest relevant time, post-access activity, mining or malware details, system state, service exposure, lateral-movement assessment, evidence excerpts, and novice-friendly response steps.
-12. If GPU review is requested or the host may have accelerators, use multi-path read-only GPU visibility checks instead of relying on a single vendor tool, and state visibility limits explicitly in the report.
+1. Requested investigation focus
+2. Scope and observation window
+3. Distro/kernel/package identity
+4. Evidence-backed findings
+5. Timeline normalized to UTC when possible
+6. Log survivability status
+7. IP traceability status
+8. Persistence, runtime, and file/hash correlation
+9. Local privesc review result if collected
+10. Unknowns, gaps, and explicit confidence limits
+11. Approval-gated follow-up actions, if the user requested remediation
 
-When exporting files, use the case-bundle layout under `reports/<case>/` and prefer the bundled report exporter.
+## Dangerous Command Gate
+
+Any command that can delete, modify, stop, restart, isolate, or otherwise change host state remains outside normal scope.
+
+If the user later explicitly authorizes a separate change step, explain:
+
+1. exact command
+2. why it is needed
+3. expected impact
+4. evidence that justifies it
+5. rollback plan
+6. disruption risk
+
+Use [references/risk-command-policy.md](references/risk-command-policy.md) and `scripts/command_guard.py` when needed.
 
 ## When To Load References
 
 Load only what is needed:
 
-1. `references/diagnostic-playbook.md` for detailed incident-triage flow.
-2. `references/os-compatibility.md` for distro differences.
-3. `references/command-trust-verification.md` for command trust issues.
-4. `references/log-loss-fallbacks.md` for deleted or damaged log scenarios.
-5. `references/manual-shell-fallback.md` when Python or scripts are unavailable.
-6. `references/restricted-permissions.md` when privilege is limited.
-7. `references/multimodal-evidence.md` for screenshots, pasted logs, and config fragments.
-8. `references/checkpoint-recovery.md` for stage markers and resume behavior.
-9. `references/enterprise-self-audit.md` for enterprise-style self-check flow.
-10. `references/case-diffing.md` for repeat-case comparison.
-11. `references/reporting-and-traceability.md` for report discipline.
-12. `references/usage-scenarios.md` for operator examples.
-13. `references/legitimate-high-compute-review.md` for false-positive control.
-14. `references/external-evidence-interfaces.md` for cloud, K8s, and boundary telemetry pivots.
+1. [references/os-compatibility.md](references/os-compatibility.md) for distro and command fallback mapping
+2. [references/log-loss-fallbacks.md](references/log-loss-fallbacks.md) for deleted-log fallback review
+3. [references/readonly-boundary.md](references/readonly-boundary.md) when the user mixes investigation and remediation intent
+4. [references/manual-shell-fallback.md](references/manual-shell-fallback.md) when Python or write access is unavailable
+5. [references/restricted-permissions.md](references/restricted-permissions.md) when privilege is limited
+6. [references/diagnostic-playbook.md](references/diagnostic-playbook.md) for broader triage flow
+7. [references/reporting-and-traceability.md](references/reporting-and-traceability.md) for report discipline
+8. [references/usage-scenarios.md](references/usage-scenarios.md) for operator examples
+9. [references/deception-and-contradiction-review.md](references/deception-and-contradiction-review.md) for fake-signal and cross-source contradiction handling
 
-## Skill Maintenance
+## Maintainer Rules
 
-If updating this skill itself:
-
-1. Use the `skill-creator` workflow.
-2. Keep `SKILL.md`, both README files, and `agents/openai.yaml` aligned.
-3. Keep examples placeholder-based; do not bake in real host facts.
-4. Keep `reports/` empty except for the placeholder file when packaging.
-5. Re-run validation before publishing or reinstalling.
-6. Run `python scripts/audit_example_placeholders.py --strict` to catch accidental example anchoring or machine-specific values.
-7. Keep `SKILL.md` compact; move detail into `references/` when the core operating contract is already clear.
+1. Keep this skill read-only by default.
+2. Keep `SKILL.md`, `README.md`, `README.en.md`, and `agents/openai.yaml` aligned.
+3. Keep implementation detail and branch-heavy handling in `references/` and `scripts/`; keep this file short as the operating contract.
+4. Preserve placeholder examples; do not bake real host facts into the package.

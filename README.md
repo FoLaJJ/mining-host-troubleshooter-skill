@@ -2,7 +2,7 @@
 
 [English README](README.en.md)
 
-用于 Linux 主机疑似挖矿入侵的只读排查与溯源技能。
+用于 Linux 主机疑似入侵、挖矿木马、持久化与本地提权暴露面的只读排查与溯源技能。
 
 这个仓库是一个 **skill**，不是给用户手工拼脚本参数的命令集合。正常使用方式是让大模型调用 skill，skill 再自动编排脚本执行与报告导出。
 
@@ -11,11 +11,14 @@
 - 最小破坏：默认只读，优先保现场。
 - 证据驱动：先采集证据，再输出结论。
 - 结论分级：区分观测事实、推断、归因，并给出置信度。
-- 审批门禁：任何状态变更操作必须先得到明确确认。
+- 范围可指定：可单独指定查入侵、查挖矿、查木马、查持久化、查提权暴露面。
+- 审批门禁：任何状态变更操作必须先得到明确确认，而且默认不进入处置阶段。
 
 ## 适用场景
 
 - Linux 主机出现异常 CPU/GPU 占用，怀疑挖矿或伪装挖矿。
+- 只想单独确认“是否被入侵、攻击者做了什么、植入了什么木马”。
+- 只想单独确认“是否存在 sudo / CopyFail / DirtyFrag 等本地提权暴露面”，但仍然坚持只读取证。
 - 可疑服务、启动项、计划任务、容器行为需要追根溯源。
 - 业务主机需要低扰动、可追溯的只读排查流程。
 - 日志缺失或被清理，需要通过残留证据尽量还原现场。
@@ -27,20 +30,26 @@
 - `$mining-host-troubleshooter 排查 <HOST_IP>，账号 <REMOTE_USER>，密码 <PASSWORD>，重点看 GPU 挖矿`
 - `$mining-host-troubleshooter 本机疑似挖矿，先做只读排查并导出中文报告`
 - `$mining-host-troubleshooter 对这台机器做跨案件差异比对，并输出结论置信度`
+- `$mining-host-troubleshooter 只排查这台机器有没有被入侵、攻击者进来后做了什么，默认只读`
+- `$mining-host-troubleshooter 只排查挖矿木马、矿池、钱包、启动项和落地文件，默认只读`
+- `$mining-host-troubleshooter 只排查 sudo / CopyFail / DirtyFrag 等本地提权暴露面，默认只读，不做利用验证`
 
 你可以继续用自然语言追加控制条件，例如：
 
 - “先不要执行任何变更操作，只做只读取证。”
 - “如果要 kill/stop/delete，先告诉我影响和回滚方案，再等我确认。”
 - “报告里保留可溯源 IP，不要隐藏。”
+- “先只查是否被入侵，不要扩展到处置。”
+- “先只查提权暴露面和本地提权痕迹，不要做任何验证性利用。”
 
 ## 技能内部排查流程
 
 1. **Trust Bootstrap**：确认目标身份、校验 SSH 信任链（`known_hosts`/指纹）。
-2. **Readonly Sweep**：执行低影响只读采集，带超时、检查点、降级兜底。
-3. **Deep Evidence Correlation**：关联进程、网络、持久化、容器、云线索、GPU 进程映射。
-4. **Confidence-Gated Conclusion**：按证据完整度输出 `confirmed` 或 `inconclusive`，禁止杜撰。
-5. **Approval-Gated Response**：仅输出处置建议，变更操作必须显式审批。
+2. **Distro First**：先识别发行版、内核、包管理器、当前权限，明确 Ubuntu / Debian / CentOS / RHEL / Rocky / Alma 等差异。
+3. **Readonly Sweep**：执行低影响只读采集，带超时、检查点、降级兜底。
+4. **Deep Evidence Correlation**：关联进程、网络、持久化、容器、云线索、GPU 进程映射、本地提权暴露面、微小配置差异。
+5. **Confidence-Gated Conclusion**：按证据完整度输出 `confirmed` 或 `inconclusive`，禁止杜撰。
+6. **Approval-Gated Response**：仅输出处置建议，变更操作必须显式审批。
 
 ## 关键自动解析能力
 
@@ -49,6 +58,11 @@
 - 自动提取 systemd `ExecStart`、cron/crontab 调度中的可疑运行命令画像。
 - GPU 侧采用多路径只读探测，不依赖单一 `nvidia-smi`，会结合 `lspci`、`lshw`、`/dev/dri`、`/sys/class/drm`、`/proc/driver/nvidia`、`rocm-smi` 等线索。
 - 自动识别命令不可用/降级标记，并在报告中显式给出可见性边界。
+- 自动记录离线/受限环境线索，明确说明本技能不依赖 GitHub 下载额外工具，也不会主动尝试外部下载。
+- 自动做跨来源矛盾与欺骗风险复核，关注认证痕迹、主日志、journald、`wtmp/btmp`、命令解析路径之间是否互相打架。
+- 优先识别 Linux 发行版、内核版本、sudo/关键包版本，先知道证据应该放在哪里、应该怎么看。
+- 日志缺失时自动转向 `wtmp`、`btmp`、`lastlog`、journald/rsyslog 配置、service/timer 元数据、包管理历史、shell 痕迹、`/proc/*/exe (deleted)` 等替代证据。
+- 对近期本地提权暴露面做只读检测与合理怀疑链整理，关注 sudo 相关问题与 `CopyFail`、`DirtyFrag` 等内核暴露面，但不做利用验证。
 - 报告前部优先展示“运行参数画像”与高信号结论，减少人工翻全文成本。
 - 领导复核报告前部强制给出“观测事实 / 推断 / 归因”结论矩阵，并标注置信度。
 
@@ -135,6 +149,7 @@ reports/
 关键文件说明：
 
 - `SKILL.md`：运行时契约，定义边界、流程、门禁与报告标准。
+- `SKILL.md` 保持短小，复杂分支、例外路径和分支矩阵下沉到 `references/`，更符合 skill 的检索与执行习惯。
 - `agents/openai.yaml`：技能入口元数据与绑定配置。
 - `scripts/run_readonly_workflow.py`：主编排器，串起采集、富化、校验、导出。
 - `scripts/collect_live_evidence.py`：多路径只读采集（本地/远程、命令降级、超时控制）。
@@ -144,6 +159,7 @@ reports/
 - `scripts/generate_operator_brief.py`：面向非安全同学的简报生成。
 - `scripts/command_guard.py`：危险命令门禁与审批约束。
 - `references/`：排查手册、降级策略、兼容性与维护规范。
+- `references/deception-and-contradiction-review.md`：专门处理假信息、误导性日志和跨来源矛盾。
 
 ## 安装
 
@@ -187,6 +203,10 @@ npx mining-host-troubleshooter-skill install --target agents
 - 删除或移动文件
 - 修改配置或启动项
 - 重启或中断业务
+
+补充约束：
+
+- 即使使用者在自然语言里直接要求 `kill`、`stop`、`delete`、`restart`，这个 skill 也默认只会继续做只读取证，并把这些动作记录为后续需单独审批的建议。
 
 ## 维护说明
 

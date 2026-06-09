@@ -47,6 +47,8 @@ PROC_FALLBACK_RE = re.compile(r"^\s*(?P<pid>\d+)\|(?P<state>[A-Za-z])\|(?P<cmd>.
 PROCESS_BINARY_HASH_RE = re.compile(r"^\s*(?P<pid>\d+)\|(?P<path>[^|]+)\|(?P<sha>[a-fA-F0-9]{64})$")
 CANDIDATE_BINARY_HASH_RE = re.compile(r"^\s*(?P<path>/[^|]+)\|(?P<sha>[a-fA-F0-9]{64})$")
 GREP_CTX_RE = re.compile(r"^(?P<path>[^:\n]+):(?P<line>\d+):(?P<body>.*)$")
+TRUST_RESOLUTION_RE = re.compile(r"^cmd=(?P<cmd>[^|]+)\|resolved=(?P<resolved>[^|]+)\|real=(?P<real>.+)$")
+TRUST_CANDIDATE_RE = re.compile(r"^candidate=(?P<cmd>[^|]+)\|path=(?P<path>[^|]+)\|real=(?P<real>.+)$")
 IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 RUNTIME_HINT_RE = re.compile(
     r"(?:\bxmrig\b|\bgminer\b|\blolminer\b|\btrex\b|\bnbminer\b|\bsrb\b|\bstratum(?:\+|://)?\b|"
@@ -455,11 +457,29 @@ def merge_ip_traces(existing: list[dict[str, Any]], new_items: list[dict[str, An
     return list(idx.values())
 
 
+def contradiction_shape(
+    category: str,
+    severity: str,
+    statement: str,
+    evidence_ids: list[str],
+) -> dict[str, Any]:
+    return {
+        "category": category,
+        "severity": severity,
+        "statement": statement,
+        "evidence_ids": sorted({str(x).strip() for x in evidence_ids if str(x).strip()}),
+    }
+
+
 def enrich(data: dict[str, Any]) -> dict[str, Any]:
     evidence_items = [as_dict(x) for x in as_list(data.get("evidence"))]
     existing_findings = [as_dict(x) for x in as_list(data.get("findings"))]
     existing_timeline = [as_dict(x) for x in as_list(data.get("timeline"))]
     existing_ip_traces = [as_dict(x) for x in as_list(data.get("ip_traces"))]
+    investigation_scope = as_dict(data.get("investigation_scope"))
+    requested_focus = [str(x).strip() for x in as_list(investigation_scope.get("requested_focus")) if str(x).strip()]
+    if not requested_focus:
+        requested_focus = ["general-compromise-review"]
     unknowns = [str(x) for x in as_list(data.get("unknowns"))]
 
     timeline_add: list[dict[str, Any]] = []
@@ -498,10 +518,37 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
     privilege_user = "unknown"
     privilege_uid = "unknown"
     privilege_has_passwordless_sudo = False
+    os_release_id = "unknown"
+    os_release_version = "unknown"
+    os_release_codename = "unknown"
+    kernel_release = "unknown"
+    kernel_package_version = "unknown"
+    sudo_version = "unknown"
+    sudo_package_version = "unknown"
+    kmod_package_version = "unknown"
+    userns_clone = "unknown"
+    user_max_namespaces = "unknown"
+    apparmor_restrict_userns = "unknown"
+    loaded_lpe_modules: set[str] = set()
+    modprobe_rule_hits: list[str] = []
+    kernel_config_hits: list[str] = []
+    sudoers_lpe_hits: list[str] = []
+    vuln_detector_statuses: dict[str, str] = {}
+    vuln_detector_details: list[str] = []
     auth_timeline_seen: set[tuple[str, str, str]] = set()
     accepted_count = 0
     failed_count = 0
     invalid_count = 0
+    trust_resolution_map: dict[str, dict[str, Any]] = {}
+    environment_signals: dict[str, str] = {}
+    contradiction_items: list[dict[str, Any]] = []
+    auth_evidence_ids: list[str] = []
+    journald_auth_evidence_ids: list[str] = []
+    primary_auth_evidence_ids: list[str] = []
+    utmp_auth_evidence_ids: list[str] = []
+    auth_failed_event_ids: set[str] = set()
+    auth_invalid_event_ids: set[str] = set()
+    auth_accepted_event_ids: set[str] = set()
 
     def add_timeline(observed_at: str, event: str, source: str, evid_id: str) -> None:
         timeline_add.append(
@@ -549,10 +596,19 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
                 fallback_marker_ids.add(evid_id)
 
         if source == "auth":
+            auth_evidence_ids.append(evid_id)
+            command_lower = command.lower()
+            if "journalctl" in command_lower:
+                journald_auth_evidence_ids.append(evid_id)
+            if any(x in command_lower for x in ["/var/log/auth.log", "/var/log/secure", "/var/log/messages", "/var/log/syslog"]):
+                primary_auth_evidence_ids.append(evid_id)
+            if any(x in command_lower for x in ["last -faiwx", "lastb -faiwx", "lastlog"]):
+                utmp_auth_evidence_ids.append(evid_id)
             for line in stdout.splitlines():
                 m = AUTH_ACCEPT_RE.search(line)
                 if m:
                     accepted_count += 1
+                    auth_accepted_event_ids.add(evid_id)
                     ip = m.group("ip")
                     user = m.group("user")
                     auth_source_map.setdefault(ip, set()).add(evid_id)
@@ -560,6 +616,7 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
                 m = AUTH_FAIL_RE.search(line)
                 if m:
                     failed_count += 1
+                    auth_failed_event_ids.add(evid_id)
                     ip = m.group("ip")
                     user = m.group("user")
                     auth_source_map.setdefault(ip, set()).add(evid_id)
@@ -568,6 +625,7 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
                 m = AUTH_INVALID_RE.search(line)
                 if m:
                     invalid_count += 1
+                    auth_invalid_event_ids.add(evid_id)
                     ip = m.group("ip")
                     user = m.group("user")
                     auth_source_map.setdefault(ip, set()).add(evid_id)
@@ -592,12 +650,57 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
 
         if source == "trust":
             for line in stdout.splitlines():
+                rm = TRUST_RESOLUTION_RE.match(line.strip())
+                if rm:
+                    cmd_name = rm.group("cmd").strip()
+                    rec = trust_resolution_map.setdefault(
+                        cmd_name,
+                        {"resolved": "", "real": "", "candidates": [], "evidence_ids": set()},
+                    )
+                    rec["resolved"] = rm.group("resolved").strip()
+                    rec["real"] = rm.group("real").strip()
+                    rec["evidence_ids"].add(evid_id)
+                    continue
+                cm = TRUST_CANDIDATE_RE.match(line.strip())
+                if cm:
+                    cmd_name = cm.group("cmd").strip()
+                    rec = trust_resolution_map.setdefault(
+                        cmd_name,
+                        {"resolved": "", "real": "", "candidates": [], "evidence_ids": set()},
+                    )
+                    candidate = {
+                        "path": cm.group("path").strip(),
+                        "real": cm.group("real").strip(),
+                    }
+                    if candidate not in rec["candidates"]:
+                        rec["candidates"].append(candidate)
+                    rec["evidence_ids"].add(evid_id)
+                    continue
                 if " is aliased to " in line:
                     trust_flags.add("command_is_aliased")
                 if " is a function" in line:
                     trust_flags.add("command_is_shell_function")
                 if line.strip().endswith(": not_found"):
                     trust_flags.add("critical_command_missing")
+
+        if source == "environment":
+            current_section = ""
+            for line in stdout.splitlines():
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                if stripped.startswith("## "):
+                    current_section = stripped[3:].strip().lower()
+                    continue
+                if current_section == "outbound_assessment" and "=" in stripped:
+                    key, value = stripped.split("=", 1)
+                    environment_signals[key.strip()] = value.strip()
+                elif current_section == "default_route" and stripped not in {"ip_route_unavailable"}:
+                    environment_signals["default_route_present"] = "yes"
+                elif current_section == "proc_net_route" and stripped and "Iface" not in stripped:
+                    environment_signals["proc_route_visible"] = "yes"
+                elif current_section == "resolv_conf" and stripped and stripped != "resolv_conf_unreadable":
+                    environment_signals["resolver_visible"] = "yes"
 
         if source == "process" and "grep -Ei 'miner|xmrig|lolminer|trex|gminer|nbminer|clash|autossh|h32|h64|\\-zsh'" in command:
             if exit_code == 0 and stdout.strip():
@@ -686,6 +789,75 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
                     host_reported_timezone = line.split("=", 1)[1].strip() or "unknown"
                 if line.startswith("NTPSynchronized="):
                     host_ntp_synchronized = line.split("=", 1)[1].strip() or "unknown"
+
+        if source == "vuln_exposure" and stdout.strip():
+            current_section = ""
+            for line in stdout.splitlines():
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                if stripped.startswith("## "):
+                    current_section = stripped[3:].strip().lower()
+                    continue
+                if current_section == "release":
+                    if stripped.startswith("ID="):
+                        os_release_id = stripped.split("=", 1)[1].strip().strip('"') or os_release_id
+                    elif stripped.startswith("VERSION_ID="):
+                        os_release_version = stripped.split("=", 1)[1].strip().strip('"') or os_release_version
+                    elif stripped.startswith("VERSION_CODENAME="):
+                        os_release_codename = stripped.split("=", 1)[1].strip().strip('"') or os_release_codename
+                elif current_section == "kernel":
+                    if re.match(r"^\d+\.\d+\.\d+", stripped) and kernel_release == "unknown":
+                        kernel_release = stripped.split()[0].strip()
+                elif current_section == "sudo_version":
+                    match = re.search(r"Sudo version\s+([^\s]+)", stripped, re.I)
+                    if match and sudo_version == "unknown":
+                        sudo_version = match.group(1).strip()
+                elif current_section == "package_versions":
+                    if stripped.startswith("sudo="):
+                        sudo_package_version = stripped.split("=", 1)[1].strip() or sudo_package_version
+                    elif stripped.startswith("kmod="):
+                        kmod_package_version = stripped.split("=", 1)[1].strip() or kmod_package_version
+                elif current_section == "userns":
+                    if "kernel.unprivileged_userns_clone" in stripped and "=" in stripped:
+                        userns_clone = stripped.split("=", 1)[1].strip() or userns_clone
+                    elif "user.max_user_namespaces" in stripped and "=" in stripped:
+                        user_max_namespaces = stripped.split("=", 1)[1].strip() or user_max_namespaces
+                    elif "kernel.apparmor_restrict_unprivileged_userns" in stripped and "=" in stripped:
+                        apparmor_restrict_userns = stripped.split("=", 1)[1].strip() or apparmor_restrict_userns
+                elif current_section == "modules":
+                    module = stripped.split()[0].strip()
+                    if module:
+                        loaded_lpe_modules.add(module)
+                elif current_section == "modprobe_rules":
+                    if len(modprobe_rule_hits) < 20:
+                        modprobe_rule_hits.append(stripped)
+                elif current_section == "kernel_config":
+                    if len(kernel_config_hits) < 20:
+                        kernel_config_hits.append(stripped)
+                elif current_section == "sudoers":
+                    if len(sudoers_lpe_hits) < 20:
+                        sudoers_lpe_hits.append(stripped)
+                        if len(initial_access_review_hits) < 20:
+                            initial_access_review_hits.append(stripped)
+                elif current_section == "ubuntu_detector":
+                    if stripped.startswith("ubuntu.codename="):
+                        os_release_codename = stripped.split("=", 1)[1].strip() or os_release_codename
+                    elif stripped.startswith("ubuntu.sudo_version="):
+                        sudo_package_version = stripped.split("=", 1)[1].strip() or sudo_package_version
+                    elif stripped.startswith("ubuntu.kernel_version="):
+                        kernel_release = stripped.split("=", 1)[1].strip() or kernel_release
+                    elif stripped.startswith("ubuntu.kernel_pkg_version="):
+                        kernel_package_version = stripped.split("=", 1)[1].strip() or kernel_package_version
+                    elif stripped.startswith("ubuntu.kmod_version="):
+                        kmod_package_version = stripped.split("=", 1)[1].strip() or kmod_package_version
+                    elif stripped.startswith("detector:"):
+                        payload = stripped.split(":", 1)[1]
+                        if "=" in payload:
+                            key, value = payload.split("=", 1)
+                            vuln_detector_statuses[key.strip()] = value.strip()
+                        if len(vuln_detector_details) < 20:
+                            vuln_detector_details.append(stripped)
 
         if source in {"persistence", "auth"} and any(token in command for token in ["authorized_keys", "sshd_config", "/etc/pam.d", "/etc/sudoers", "/etc/ld.so.preload", "/etc/rc.local"]):
             for line in stdout.splitlines():
@@ -860,6 +1032,138 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
         )
     malware_file_candidates = dedupe_hash_entries(malware_file_candidates)
 
+    possible_lpe_cves = sorted(
+        key for key, value in vuln_detector_statuses.items() if value == "possibly_vulnerable" and key.startswith("CVE-")
+    )
+    fixed_lpe_cves = sorted(
+        key for key, value in vuln_detector_statuses.items() if value == "fixed_or_newer" and key.startswith("CVE-")
+    )
+    unresolved_lpe_cves = sorted(
+        key
+        for key, value in vuln_detector_statuses.items()
+        if key.startswith("CVE-") and value in {"unknown_branch", "unknown_release", "unsupported_family"}
+    )
+    lpe_review_ids = [str(x.get("id", "")) for x in evidence_items if str(x.get("source", "")) == "vuln_exposure"]
+    has_possible_lpe_exposure = bool(possible_lpe_cves)
+    has_lpe_surface_review = bool(
+        lpe_review_ids
+        or loaded_lpe_modules
+        or modprobe_rule_hits
+        or kernel_config_hits
+        or sudoers_lpe_hits
+        or vuln_detector_statuses
+    )
+    lpe_privesc_plausible = bool(
+        has_possible_lpe_exposure
+        and (
+            failed_count > 0
+            or invalid_count > 0
+            or privilege_has_passwordless_sudo
+            or bool(initial_access_review_hits)
+            or bool(kernel_review_hits)
+        )
+    )
+    lpe_summary_parts: list[str] = []
+    if possible_lpe_cves:
+        lpe_summary_parts.append("possible=" + ",".join(possible_lpe_cves))
+    if fixed_lpe_cves:
+        lpe_summary_parts.append("fixed=" + ",".join(fixed_lpe_cves[:6]))
+    if unresolved_lpe_cves:
+        lpe_summary_parts.append("unresolved=" + ",".join(unresolved_lpe_cves))
+    if loaded_lpe_modules:
+        lpe_summary_parts.append("loaded_modules=" + ",".join(sorted(loaded_lpe_modules)))
+    if sudo_package_version != "unknown":
+        lpe_summary_parts.append(f"sudo_pkg={sudo_package_version}")
+    if kernel_release != "unknown":
+        lpe_summary_parts.append(f"kernel={kernel_release}")
+    if kernel_package_version != "unknown":
+        lpe_summary_parts.append(f"kernel_pkg={kernel_package_version}")
+    lpe_visibility_summary = "; ".join(lpe_summary_parts) or "no_lpe_signal_recovered"
+
+    auth_primary_present = bool(primary_auth_evidence_ids)
+    auth_journal_present = bool(journald_auth_evidence_ids)
+    auth_utmp_present = bool(utmp_auth_evidence_ids)
+    if (failed_count > 0 or invalid_count > 0) and not auth_journal_present:
+        contradiction_items.append(
+            contradiction_shape(
+                "auth_cross_source_gap",
+                "medium",
+                "Authentication failures were observed, but no journald-backed SSH authentication evidence was recovered in this pass.",
+                list(auth_failed_event_ids | auth_invalid_event_ids | set(primary_auth_evidence_ids)),
+            )
+        )
+    if (failed_count > 0 or invalid_count > 0) and not auth_utmp_present:
+        contradiction_items.append(
+            contradiction_shape(
+                "auth_cross_source_gap",
+                "low",
+                "Authentication failures were observed, but no surviving wtmp/btmp/lastlog-derived corroboration was recovered in this pass.",
+                list(auth_failed_event_ids | auth_invalid_event_ids | set(primary_auth_evidence_ids)),
+            )
+        )
+    if accepted_count > 0 and not auth_primary_present and auth_journal_present:
+        contradiction_items.append(
+            contradiction_shape(
+                "auth_log_survivability",
+                "medium",
+                "Accepted-authentication evidence relied on journald output without surviving primary auth-log corroboration.",
+                list(auth_accepted_event_ids | set(journald_auth_evidence_ids)),
+            )
+        )
+
+    trusted_prefixes = ("/usr/bin/", "/bin/", "/usr/sbin/", "/sbin/", "/usr/local/bin/")
+    trust_path_conflict_count = 0
+    for cmd_name, rec in trust_resolution_map.items():
+        resolved = str(rec.get("resolved", "")).strip()
+        real = str(rec.get("real", "")).strip()
+        candidates = [as_dict(x) for x in as_list(rec.get("candidates"))]
+        evidence_ids = sorted(str(x) for x in rec.get("evidence_ids", set()) if str(x).strip())
+        if resolved in {"", "missing"}:
+            continue
+        if candidates and all(str(item.get("path", "")).strip() != resolved for item in candidates):
+            trust_path_conflict_count += 1
+            contradiction_items.append(
+                contradiction_shape(
+                    "command_trust_resolution",
+                    "high",
+                    f"Command {cmd_name} resolved to {resolved}, but that path was not among the trusted on-disk candidate locations captured during collection.",
+                    evidence_ids,
+                )
+            )
+        elif real and not any(real.startswith(prefix) for prefix in trusted_prefixes):
+            trust_path_conflict_count += 1
+            contradiction_items.append(
+                contradiction_shape(
+                    "command_trust_resolution",
+                    "high",
+                    f"Command {cmd_name} resolved outside standard trusted prefixes: {real}.",
+                    evidence_ids,
+                )
+            )
+
+    environment_summary_parts: list[str] = []
+    if environment_signals.get("default_route_present") == "yes":
+        environment_summary_parts.append("default_route_present")
+    if environment_signals.get("proc_route_visible") == "yes":
+        environment_summary_parts.append("proc_route_visible")
+    if environment_signals.get("resolver_visible") == "yes":
+        environment_summary_parts.append("resolver_visible")
+    if environment_signals.get("external_tool_download_required"):
+        environment_summary_parts.append(
+            "external_tool_download_required=" + environment_signals["external_tool_download_required"]
+        )
+    if environment_signals.get("external_tool_download_attempted"):
+        environment_summary_parts.append(
+            "external_tool_download_attempted=" + environment_signals["external_tool_download_attempted"]
+        )
+    environment_summary = "; ".join(environment_summary_parts) or "passive_constraints_not_recovered"
+    has_log_risk = any(str(item.get("status", "")).lower() in {"missing", "tampered", "suspicious"} for item in as_list(data.get("log_integrity")))
+    deception_risk_level = "low"
+    if trust_path_conflict_count or any(x.get("severity") == "high" for x in contradiction_items):
+        deception_risk_level = "high"
+    elif contradiction_items or trust_flags or has_log_risk:
+        deception_risk_level = "medium"
+
     fidx = len(existing_findings)
 
     if failed_count > 0 or invalid_count > 0:
@@ -893,6 +1197,21 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
                 claim_type="observed_fact",
                 hypothesis_id="H-AUTO-TRUST-001",
                 confidence_reason="The trust probe directly observed alias/function output, but intent and impact still require analyst review.",
+            )
+        )
+
+    if trust_path_conflict_count:
+        fidx += 1
+        trust_ids = sorted({eid for rec in trust_resolution_map.values() for eid in rec.get("evidence_ids", set())})
+        finding_add.append(
+            finding_shape(
+                finding_id=f"F-AUTO-{fidx:03d}",
+                statement=f"Structured command-resolution review found {trust_path_conflict_count} command path conflict(s) against trusted candidate locations or trusted path prefixes.",
+                confidence="high",
+                evidence_ids=trust_ids,
+                claim_type="observed_fact",
+                hypothesis_id="H-AUTO-TRUST-002",
+                confidence_reason="The conflict is derived from direct readonly comparison between shell resolution results and captured absolute-path candidates.",
             )
         )
 
@@ -1012,6 +1331,36 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
             )
         )
 
+    if contradiction_items:
+        fidx += 1
+        contradiction_ids = sorted({eid for item in contradiction_items for eid in as_list(item.get("evidence_ids"))})
+        finding_add.append(
+            finding_shape(
+                finding_id=f"F-AUTO-{fidx:03d}",
+                statement=f"Cross-source review produced {len(contradiction_items)} contradiction or deception-risk signal(s) that limit how confidently the scene can be reconstructed.",
+                confidence="medium" if deception_risk_level == "high" else "low",
+                evidence_ids=contradiction_ids,
+                claim_type="inference",
+                hypothesis_id="H-AUTO-DECEPTION-001",
+                confidence_reason="These signals come from inconsistencies between command trust, log survivability, and cross-source authentication evidence rather than from a single artifact alone.",
+            )
+        )
+
+    if environment_signals:
+        fidx += 1
+        env_ids = [str(x.get("id", "")) for x in evidence_items if str(x.get("source", "")) == "environment"]
+        finding_add.append(
+            finding_shape(
+                finding_id=f"F-AUTO-{fidx:03d}",
+                statement=f"Passive environment-constraint review recorded host connectivity and tooling context without attempting external downloads: {environment_summary}.",
+                confidence="low",
+                evidence_ids=sorted(set(env_ids)),
+                claim_type="observed_fact",
+                hypothesis_id="H-AUTO-ENV-001",
+                confidence_reason="The environment summary comes from passive reads of resolver, route, and host configuration surfaces only.",
+            )
+        )
+
     if initial_access_review_hits:
         fidx += 1
         access_ids = [str(x.get("id", "")) for x in evidence_items if str(x.get("source", "")) in {"auth", "persistence"}]
@@ -1024,6 +1373,25 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
                 claim_type="inference",
                 hypothesis_id="H-AUTO-ACCESS-001",
                 confidence_reason="The lines indicate review surfaces such as authorized_keys, sshd, PAM, sudoers, or preload entries, but maliciousness is not established automatically.",
+            )
+        )
+
+    if has_lpe_surface_review:
+        fidx += 1
+        statement = (
+            f"Read-only local privilege-escalation review recovered kernel/package/config evidence: {lpe_visibility_summary}."
+        )
+        if lpe_privesc_plausible:
+            statement += " Combined with access or root-scope review signals, a normal-user-to-root escalation path is a plausible hypothesis."
+        finding_add.append(
+            finding_shape(
+                finding_id=f"F-AUTO-{fidx:03d}",
+                statement=statement,
+                confidence="medium" if has_possible_lpe_exposure else "low",
+                evidence_ids=sorted(set(lpe_review_ids + [str(x.get("id", "")) for x in evidence_items if str(x.get("source", "")) in {"auth", "persistence"}])),
+                claim_type="inference",
+                hypothesis_id="H-AUTO-LPE-001",
+                confidence_reason="This conclusion is derived from read-only version comparison, module/config visibility, and surrounding access evidence. Backports or non-Ubuntu packaging can require manual vendor advisory confirmation.",
             )
         )
 
@@ -1111,8 +1479,6 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
     has_runtime_profile = bool(runtime_profiles)
     has_auth_pressure = failed_count > 0 or invalid_count > 0
     has_persistence_surface = bool(initial_access_review_hits or kernel_review_hits)
-    has_log_risk = any(str(item.get("status", "")).lower() in {"missing", "tampered", "suspicious"} for item in as_list(data.get("log_integrity")))
-
     def matrix_item(
         hypothesis_id: str,
         title: str,
@@ -1180,6 +1546,25 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
                 f"Authentication pressure observed (failed={failed_count}, invalid={invalid_count})."
                 if has_auth_pressure
                 else "Only review-surface signals are present; direct credential abuse evidence is limited."
+            ),
+        )
+    )
+    hypothesis_matrix.append(
+        matrix_item(
+            "H-MATRIX-LPE-001",
+            "Local privilege escalation hypothesis",
+            "supported" if lpe_privesc_plausible else ("inconclusive" if has_lpe_surface_review else "not_observed"),
+            "medium" if lpe_privesc_plausible else ("low" if has_lpe_surface_review else "low"),
+            sorted(set(lpe_review_ids + src_ids.get("auth", []) + src_ids.get("persistence", []))),
+            [],
+            (
+                f"Possible LPE exposure indicators: {', '.join(possible_lpe_cves)}; kernel={kernel_release}; sudo_pkg={sudo_package_version}."
+                if lpe_privesc_plausible
+                else (
+                    f"LPE review surfaces were collected ({lpe_visibility_summary}), but the available evidence does not confirm that a local privesc path was actually used."
+                    if has_lpe_surface_review
+                    else "No dedicated local privilege-escalation review surface was observed in this pass."
+                )
             ),
         )
     )
@@ -1279,10 +1664,52 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
         },
         "listening_ports": sorted(listen_ports),
         "trust_anomalies": sorted(trust_flags),
+        "trust_resolution_map": {
+            key: {
+                "resolved": str(value.get("resolved", "")).strip(),
+                "real": str(value.get("real", "")).strip(),
+                "candidates": [as_dict(x) for x in as_list(value.get("candidates"))][:8],
+                "evidence_ids": sorted(str(x) for x in value.get("evidence_ids", set()) if str(x).strip()),
+            }
+            for key, value in sorted(trust_resolution_map.items())
+        },
         "privilege_scope": {
             "user": privilege_user,
             "uid": privilege_uid,
             "passwordless_sudo_visible": privilege_has_passwordless_sudo,
+        },
+        "investigation_scope": {
+            "requested_focus": requested_focus,
+            "request_summary": str(investigation_scope.get("request_summary", "")).strip(),
+            "readonly_only": bool(investigation_scope.get("readonly_only", True)),
+            "state_change_allowed": bool(investigation_scope.get("state_change_allowed", False)),
+        },
+        "platform_identity": {
+            "os_release_id": os_release_id,
+            "os_release_version": os_release_version,
+            "os_release_codename": os_release_codename,
+            "kernel_release": kernel_release,
+            "kernel_package_version": kernel_package_version,
+            "sudo_version": sudo_version,
+            "sudo_package_version": sudo_package_version,
+            "kmod_package_version": kmod_package_version,
+        },
+        "local_privesc_review": {
+            "possible_cves": possible_lpe_cves,
+            "fixed_or_newer_cves": fixed_lpe_cves,
+            "unresolved_cves": unresolved_lpe_cves,
+            "detector_statuses": vuln_detector_statuses,
+            "detector_detail_samples": vuln_detector_details[:12],
+            "userns_clone": userns_clone,
+            "user_max_namespaces": user_max_namespaces,
+            "apparmor_restrict_unprivileged_userns": apparmor_restrict_userns,
+            "loaded_module_samples": sorted(loaded_lpe_modules)[:12],
+            "modprobe_rule_samples": modprobe_rule_hits[:12],
+            "kernel_config_samples": kernel_config_hits[:12],
+            "sudoers_review_samples": sudoers_lpe_hits[:12],
+            "possible_lpe_exposure": has_possible_lpe_exposure,
+            "lpe_path_plausible": lpe_privesc_plausible,
+            "visibility_summary": lpe_visibility_summary,
         },
         "process_ioc_match_count": len(ioc_process_lines),
         "process_ioc_samples": sorted(ioc_process_lines)[:10],
@@ -1312,6 +1739,18 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
         "gpu_visibility_summary": gpu_visibility_summary,
         "command_fallback_marker_count": len(fallback_markers),
         "command_fallback_markers": fallback_markers[:20],
+        "environment_constraints": {
+            "signals": environment_signals,
+            "summary": environment_summary,
+            "external_tool_download_required": environment_signals.get("external_tool_download_required", "no"),
+            "external_tool_download_attempted": environment_signals.get("external_tool_download_attempted", "no"),
+            "network_assessment_mode": environment_signals.get("network_assessment_mode", "passive_host_state_only"),
+        },
+        "contradiction_review": {
+            "deception_risk_level": deception_risk_level,
+            "count": len(contradiction_items),
+            "items": contradiction_items[:20],
+        },
         "runtime_profile_count": len(runtime_profiles),
         "runtime_profile_signal_count": runtime_signal_count,
         "runtime_profiles": runtime_profiles[:20],
@@ -1347,6 +1786,13 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
     data["ip_traces"] = merged_ip_traces
     data["hypothesis_matrix"] = hypothesis_matrix
     data["unknowns"] = unknowns
+    data["investigation_scope"] = scene_reconstruction.get("investigation_scope", {})
+    data["collection_constraints"] = {
+        "readonly_only": True,
+        "external_tool_download_required": False,
+        "external_tool_download_attempted": False,
+        "network_assessment_mode": str(scene_reconstruction.get("environment_constraints", {}).get("network_assessment_mode", "passive_host_state_only")),
+    }
     data["scene_reconstruction"] = scene_reconstruction
     data["enrichment"] = {
         "script": "enrich_case_evidence.py",

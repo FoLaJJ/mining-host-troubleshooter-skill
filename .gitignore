@@ -2,10 +2,14 @@ __pycache__/
 *.pyc
 *.pyo
 gcm-diagnose.log
+INTERVIEW_PREP.md
 
 # Local extracted artifacts (may contain sensitive content)
 *.txt
-report*.md
+/report.md
+/report.zh-CN.md
+/leadership-report.md
+/leadership-report.zh-CN.md
 artifacts-INC-*/
 evidence*.json
 reports/*
@@ -14,3 +18,4 @@ reports/*
 # Keep repository docs
 !README.md
 !README.zh-CN.md
+!references/reporting-and-traceability.md

@@ -2144,6 +2144,9 @@ def top_conclusion_lines(
     runtime_wallets = as_list(scene.get("runtime_wallets"))
     runtime_passwords = as_list(scene.get("runtime_passwords"))
     runtime_cpu_threads = as_list(scene.get("runtime_cpu_threads"))
+    contradiction_review = as_dict(ctx["contradiction_review"])
+    deception_risk_level = str(contradiction_review.get("deception_risk_level", "unknown")).strip() or "unknown"
+    deception_signal_count = int(contradiction_review.get("count", 0) or 0)
     lines = [
         anchor_tag("report-conclusion"),
         "## Investigation Conclusion",
@@ -2204,6 +2207,7 @@ def top_conclusion_lines(
             "### Remaining Gaps",
             f"- **IP Traceability:** `{unknown_trace_count}` item(s) remain untraced or unknown.",
             f"- **Log Survivability:** `{ctx['log_risk_count']}` artifact(s) are missing, suspicious, or tampered.",
+            f"- **Deception Risk:** `{deception_risk_level}` with `{deception_signal_count}` contradiction signal(s).",
             f"- **Privilege Visibility:** observed UID `{maybe_redact(observed_uid)}`; deeper indicators outside current visibility cannot be treated as absent.",
             "- **Next Reading Path:** [Findings](#report-findings) | [Timeline](#report-timeline) | [Evidence Details](#report-evidence-details)",
             "",
@@ -2239,6 +2243,9 @@ def top_conclusion_lines_zh_cn(
     runtime_wallets = as_list(scene.get("runtime_wallets"))
     runtime_passwords = as_list(scene.get("runtime_passwords"))
     runtime_cpu_threads = as_list(scene.get("runtime_cpu_threads"))
+    contradiction_review = as_dict(ctx["contradiction_review"])
+    deception_risk_level = str(contradiction_review.get("deception_risk_level", "unknown")).strip() or "unknown"
+    deception_signal_count = int(contradiction_review.get("count", 0) or 0)
     posture_label = {
         "high": "高",
         "medium": "中",
@@ -2329,6 +2336,7 @@ def top_conclusion_lines_zh_cn(
             "### 未解决缺口",
             f"- **IP 溯源：** 仍有 `{unknown_trace_count}` 项未完成溯源或状态未知。",
             f"- **日志留存：** 仍有 `{ctx['log_risk_count']}` 个日志相关产物缺失、可疑或疑似被篡改。",
+            f"- **欺骗风险：** `{maybe_redact({'high': '高', 'medium': '中', 'low': '低', 'unknown': '未知'}.get(deception_risk_level, deception_risk_level))}`，共 `{deception_signal_count}` 条矛盾信号。",
             f"- **权限可见性：** 当前观测 UID 为 `{maybe_redact(observed_uid)}`，超出当前权限边界的指标不能直接视为不存在。",
             "- **继续阅读：** [结论与研判](#report-findings) | [时间线](#report-timeline) | [证据详情](#report-evidence-details)",
             "",
@@ -2433,6 +2441,11 @@ def prepare_report_context(
     artifact_hashes = load_optional_case_json(case_dir, "meta/artifact_hashes.json")
     workflow_checkpoints = load_optional_case_json(case_dir, "meta/workflow_checkpoints.json")
     scene_reconstruction = as_dict(data.get("scene_reconstruction"))
+    investigation_scope = as_dict(data.get("investigation_scope") or scene_reconstruction.get("investigation_scope"))
+    platform_identity = as_dict(scene_reconstruction.get("platform_identity"))
+    local_privesc_review = as_dict(scene_reconstruction.get("local_privesc_review"))
+    environment_constraints = as_dict(scene_reconstruction.get("environment_constraints") or data.get("collection_constraints"))
+    contradiction_review = as_dict(scene_reconstruction.get("contradiction_review"))
     remote_trust = as_dict(data.get("remote_trust"))
     privilege_scope = as_dict(scene_reconstruction.get("privilege_scope"))
     time_norm = as_dict(scene_reconstruction.get("time_normalization"))
@@ -2514,6 +2527,11 @@ def prepare_report_context(
         "case_validation": case_validation,
         "artifact_hashes": artifact_hashes,
         "scene_reconstruction": scene_reconstruction,
+        "investigation_scope": investigation_scope,
+        "platform_identity": platform_identity,
+        "local_privesc_review": local_privesc_review,
+        "environment_constraints": environment_constraints,
+        "contradiction_review": contradiction_review,
         "remote_trust": remote_trust,
         "privilege_scope": privilege_scope,
         "time_norm": time_norm,
@@ -2565,6 +2583,10 @@ def build_report(data: dict[str, Any], redact: bool, strict: bool, case_dir: str
     artifact_hashes = ctx["artifact_hashes"]
     evidence_items = ctx["evidence_items"]
     warnings = ctx["warnings"]
+    contradiction_review = as_dict(ctx["contradiction_review"])
+    environment_constraints = as_dict(ctx["environment_constraints"])
+    contradiction_review = as_dict(ctx["contradiction_review"])
+    environment_constraints = as_dict(ctx["environment_constraints"])
 
     lines: list[str] = [anchor_tag("report-top"), f"# {ctx['title']}", ""]
     if case_dir:
@@ -2586,8 +2608,10 @@ def build_report(data: dict[str, Any], redact: bool, strict: bool, case_dir: str
         "- [Key Risks](#report-key-risks)",
         "- [Time Normalization](#report-time-normalization)",
         "- [Trust Bootstrap](#report-trust-bootstrap)",
+        "- [Environment Constraints](#report-environment-constraints)",
         "- [Privilege Scope](#report-privilege-scope)",
         "- [Scene Snapshot](#report-scene-snapshot)",
+        "- [Deception Review](#report-deception-review)",
         "- [Workflow Checkpoints](#report-workflow-checkpoints)",
         "- [Evidence Source Navigator](#report-evidence-source-navigator)",
         "- [Evidence Index](#report-evidence-index)",
@@ -2624,8 +2648,10 @@ def build_report(data: dict[str, Any], redact: bool, strict: bool, case_dir: str
         f"- **Action Records:** `{len(ctx['actions'])}` total, `{len(ctx['change_actions'])}` potentially impactful, `{ctx['pending_approval']}` pending approval",
         f"- **Claim Mix:** observed_fact `{claim_type_counts.get('observed_fact', 0)}`, inference `{claim_type_counts.get('inference', 0)}`, attribution `{claim_type_counts.get('attribution', 0)}`",
         f"- **Confidence Mix:** {confidence_icon('high')} high `{confidence_counts.get('high', 0)}`, {confidence_icon('medium')} medium `{confidence_counts.get('medium', 0)}`, {confidence_icon('low')} low `{confidence_counts.get('low', 0)}`, {confidence_icon('unknown')} unknown `{confidence_counts.get('unknown', 0)}`",
+        f"- **Requested Focus:** {maybe_redact(', '.join(as_list(ctx['investigation_scope'].get('requested_focus'))) or 'general-compromise-review')}",
         f"- **Expected Workload:** {maybe_redact(ctx['expected_workload'] or 'not provided')}",
         f"- **Artifact Hash Catalog:** `{artifact_hashes.get('count', len(evidence_items))}` item(s), algorithm `{artifact_hashes.get('algorithm', 'unknown')}`",
+        f"- **Deception Risk:** `{maybe_redact(str(contradiction_review.get('deception_risk_level', 'unknown')))}`",
         "",
         anchor_tag("report-key-risks"),
         "## Key Risks",
@@ -2657,11 +2683,22 @@ def build_report(data: dict[str, Any], redact: bool, strict: bool, case_dir: str
         lines.append("- No remote trust metadata was recorded.")
     lines.extend([
         "",
+        anchor_tag("report-environment-constraints"),
+        "## Environment Constraints",
+        f"- **External Tool Download Required:** `{maybe_redact(str(environment_constraints.get('external_tool_download_required', 'unknown')))}`",
+        f"- **External Tool Download Attempted:** `{maybe_redact(str(environment_constraints.get('external_tool_download_attempted', 'unknown')))}`",
+        f"- **Network Assessment Mode:** `{maybe_redact(str(environment_constraints.get('network_assessment_mode', 'unknown')))}`",
+        f"- **Passive Summary:** {maybe_redact(str(environment_constraints.get('summary', environment_constraints.get('signals', {})) or 'not collected'))}",
+        "",
         anchor_tag("report-privilege-scope"),
         "## Privilege Scope",
         f"- **Observed User:** `{maybe_redact(str(privilege_scope.get('user', 'unknown')))}`",
         f"- **Observed UID:** `{maybe_redact(str(privilege_scope.get('uid', 'unknown')))}`",
         f"- **Passwordless Sudo Visible:** `{maybe_redact(str(privilege_scope.get('passwordless_sudo_visible', 'unknown')))}`",
+        f"- **Kernel Release:** `{maybe_redact(str(ctx['platform_identity'].get('kernel_release', 'unknown')))}`",
+        f"- **OS Release:** `{maybe_redact(str(ctx['platform_identity'].get('os_release_id', 'unknown')))} {maybe_redact(str(ctx['platform_identity'].get('os_release_version', 'unknown')))} {maybe_redact(str(ctx['platform_identity'].get('os_release_codename', 'unknown')))} `".rstrip(),
+        f"- **Sudo Package Version:** `{maybe_redact(str(ctx['platform_identity'].get('sudo_package_version', ctx['platform_identity'].get('sudo_version', 'unknown'))))}`",
+        f"- **Local Privesc Exposure Summary:** {maybe_redact(str(ctx['local_privesc_review'].get('visibility_summary', 'not collected')))}",
         "- **Interpretation:** Limited visibility means absence of a deeper indicator cannot be treated as proof of absence.",
         "",
         anchor_tag("report-scene-snapshot"),
@@ -2682,6 +2719,7 @@ def build_report(data: dict[str, Any], redact: bool, strict: bool, case_dir: str
         f"- **GPU Peak Utilization:** `{scene_reconstruction.get('gpu_peak_utilization_percent', 0)}%`",
         f"- **GPU Compute Process Count:** `{scene_reconstruction.get('gpu_compute_process_count', 0)}`",
         f"- **GPU Suspicious Process Count:** `{scene_reconstruction.get('gpu_suspicious_process_count', 0)}`",
+        f"- **Possible LPE CVE Count:** `{len(as_list(ctx['local_privesc_review'].get('possible_cves')))}`",
         "",
     ])
     append_sample_section(lines, "Auth Source IPs", as_list(scene_reconstruction.get("auth_source_ips")), maybe_redact, limit=12)
@@ -2694,9 +2732,27 @@ def build_report(data: dict[str, Any], redact: bool, strict: bool, case_dir: str
     append_sample_section(lines, "Initial-Access Review Samples", as_list(scene_reconstruction.get("initial_access_review_samples")), maybe_redact, limit=10)
     append_sample_section(lines, "Container / Cloud Review Samples", as_list(scene_reconstruction.get("container_cloud_review_samples")), maybe_redact, limit=10)
     append_sample_section(lines, "Kernel / eBPF Review Samples", as_list(scene_reconstruction.get("kernel_review_samples")), maybe_redact, limit=10)
+    append_sample_section(lines, "Local Privesc Detector Samples", as_list(ctx["local_privesc_review"].get("detector_detail_samples")), maybe_redact, limit=10)
     append_sample_section(lines, "GPU Adapter Samples", as_list(scene_reconstruction.get("gpu_adapter_samples")), maybe_redact, limit=8)
     append_sample_section(lines, "GPU Compute Process Samples", as_list(scene_reconstruction.get("gpu_compute_process_samples")), maybe_redact, limit=8)
     append_sample_section(lines, "GPU Suspicious Process Samples", as_list(scene_reconstruction.get("gpu_suspicious_process_samples")), maybe_redact, limit=8)
+    lines.extend([
+        "",
+        anchor_tag("report-deception-review"),
+        "## Deception Review",
+        f"- **Risk Level:** `{maybe_redact(str(contradiction_review.get('deception_risk_level', 'unknown')))}`",
+        f"- **Contradiction Signal Count:** `{maybe_redact(str(contradiction_review.get('count', 0)))}`",
+    ])
+    contradiction_items = [as_dict(x) for x in as_list(contradiction_review.get("items"))]
+    if contradiction_items:
+        for item in contradiction_items[:10]:
+            lines.append(
+                f"- **{maybe_redact(str(item.get('category', 'unknown')))} / {maybe_redact(str(item.get('severity', 'unknown')))}:** "
+                f"{maybe_redact(str(item.get('statement', '')))} | evidence: "
+                f"{evidence_reference_list(as_list(item.get('evidence_ids')), ctx['evid_idx'], case_dir)}"
+            )
+    else:
+        lines.append("- No contradiction signals were recorded in this pass.")
     lines.extend([
         "",
         "## Coverage and False-Positive Control",
@@ -3008,6 +3064,8 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
     artifact_hashes = ctx["artifact_hashes"]
     evidence_items = ctx["evidence_items"]
     warnings = ctx["warnings"]
+    contradiction_review = as_dict(ctx["contradiction_review"])
+    environment_constraints = as_dict(ctx["environment_constraints"])
 
     lines: list[str] = [anchor_tag("report-top"), f"# {ctx['title']} - 中文全量报告", ""]
     if case_dir:
@@ -3029,8 +3087,10 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
         "- [关键风险](#report-key-risks)",
         "- [时间归一化](#report-time-normalization)",
         "- [信任引导](#report-trust-bootstrap)",
+        "- [环境约束](#report-environment-constraints)",
         "- [权限范围](#report-privilege-scope)",
         "- [现场快照](#report-scene-snapshot)",
+        "- [欺骗风险复核](#report-deception-review)",
         "- [流程检查点](#report-workflow-checkpoints)",
         "- [证据来源导航](#report-evidence-source-navigator)",
         "- [证据索引](#report-evidence-index)",
@@ -3067,8 +3127,10 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
         f"- **动作记录：** 共 `{len(ctx['actions'])}` 条，其中 `{len(ctx['change_actions'])}` 条可能影响业务，`{ctx['pending_approval']}` 条待审批",
         f"- **结论类型分布：** 观测事实 `{claim_type_counts.get('observed_fact', 0)}`，推断 `{claim_type_counts.get('inference', 0)}`，归因 `{claim_type_counts.get('attribution', 0)}`",
         f"- **置信度分布：** {confidence_icon('high')} 高 `{confidence_counts.get('high', 0)}`，{confidence_icon('medium')} 中 `{confidence_counts.get('medium', 0)}`，{confidence_icon('low')} 低 `{confidence_counts.get('low', 0)}`，{confidence_icon('unknown')} 未知 `{confidence_counts.get('unknown', 0)}`",
+        f"- **请求排查焦点：** {maybe_redact(', '.join(as_list(ctx['investigation_scope'].get('requested_focus'))) or 'general-compromise-review')}",
         f"- **预期工作负载：** {maybe_redact(ctx['expected_workload'] or '未提供')}",
         f"- **产物哈希目录：** `{artifact_hashes.get('count', len(evidence_items))}` 项，算法 `{artifact_hashes.get('algorithm', 'unknown')}`",
+        f"- **欺骗风险：** `{maybe_redact({'high': '高', 'medium': '中', 'low': '低', 'unknown': '未知'}.get(str(contradiction_review.get('deception_risk_level', 'unknown')), str(contradiction_review.get('deception_risk_level', 'unknown'))))}`",
         "",
         anchor_tag("report-key-risks"),
         "## 关键风险",
@@ -3100,11 +3162,22 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
         lines.append("- 未记录远程信任元数据。")
     lines.extend([
         "",
+        anchor_tag("report-environment-constraints"),
+        "## 环境约束",
+        f"- **是否需要外部下载工具：** `{maybe_redact_zh(str(environment_constraints.get('external_tool_download_required', 'unknown')))}`",
+        f"- **是否尝试过外部下载工具：** `{maybe_redact_zh(str(environment_constraints.get('external_tool_download_attempted', 'unknown')))}`",
+        f"- **网络评估模式：** `{maybe_redact(str(environment_constraints.get('network_assessment_mode', 'unknown')))}`",
+        f"- **被动摘要：** {maybe_redact(str(environment_constraints.get('summary', environment_constraints.get('signals', {})) or '未采集'))}",
+        "",
         anchor_tag("report-privilege-scope"),
         "## 权限范围",
         f"- **当前用户：** `{maybe_redact(str(privilege_scope.get('user', 'unknown')))}`",
         f"- **当前 UID：** `{maybe_redact(str(privilege_scope.get('uid', 'unknown')))}`",
         f"- **是否可见免密 sudo：** `{maybe_redact_zh(str(privilege_scope.get('passwordless_sudo_visible', 'unknown')))}`",
+        f"- **内核版本：** `{maybe_redact(str(ctx['platform_identity'].get('kernel_release', 'unknown')))}`",
+        f"- **发行版信息：** `{maybe_redact(str(ctx['platform_identity'].get('os_release_id', 'unknown')))} {maybe_redact(str(ctx['platform_identity'].get('os_release_version', 'unknown')))} {maybe_redact(str(ctx['platform_identity'].get('os_release_codename', 'unknown')))} `".rstrip(),
+        f"- **sudo 包版本：** `{maybe_redact(str(ctx['platform_identity'].get('sudo_package_version', ctx['platform_identity'].get('sudo_version', 'unknown'))))}`",
+        f"- **本地提权暴露面摘要：** {maybe_redact(str(ctx['local_privesc_review'].get('visibility_summary', '未采集')))}",
         "- **解释：** 若当前权限受限，则未观察到更深层指标不能视为其不存在。",
         "",
         anchor_tag("report-scene-snapshot"),
@@ -3125,6 +3198,7 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
         f"- **GPU 峰值利用率：** `{scene_reconstruction.get('gpu_peak_utilization_percent', 0)}%`",
         f"- **GPU 计算进程数量：** `{scene_reconstruction.get('gpu_compute_process_count', 0)}`",
         f"- **GPU 可疑进程数量：** `{scene_reconstruction.get('gpu_suspicious_process_count', 0)}`",
+        f"- **可能的本地提权 CVE 数量：** `{len(as_list(ctx['local_privesc_review'].get('possible_cves')))}`",
         "",
     ])
     append_sample_section_zh_cn(lines, "认证来源 IP", as_list(scene_reconstruction.get("auth_source_ips")), limit=12)
@@ -3137,9 +3211,25 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
     append_sample_section_zh_cn(lines, "初始访问复核样本", as_list(scene_reconstruction.get("initial_access_review_samples")), limit=10)
     append_sample_section_zh_cn(lines, "容器 / 云侧复核样本", as_list(scene_reconstruction.get("container_cloud_review_samples")), limit=10)
     append_sample_section_zh_cn(lines, "内核 / eBPF 复核样本", as_list(scene_reconstruction.get("kernel_review_samples")), limit=10)
+    append_sample_section_zh_cn(lines, "本地提权检测样本", as_list(ctx["local_privesc_review"].get("detector_detail_samples")), limit=10)
     append_sample_section_zh_cn(lines, "GPU 适配器样本", as_list(scene_reconstruction.get("gpu_adapter_samples")), limit=8)
     append_sample_section_zh_cn(lines, "GPU 计算进程样本", as_list(scene_reconstruction.get("gpu_compute_process_samples")), limit=8)
     append_sample_section_zh_cn(lines, "GPU 可疑进程样本", as_list(scene_reconstruction.get("gpu_suspicious_process_samples")), limit=8)
+    lines.extend([
+        "## 欺骗风险复核",
+        f"- **风险级别：** `{maybe_redact({'high': '高', 'medium': '中', 'low': '低', 'unknown': '未知'}.get(str(contradiction_review.get('deception_risk_level', 'unknown')), str(contradiction_review.get('deception_risk_level', 'unknown'))))}`",
+        f"- **矛盾信号数量：** `{maybe_redact(str(contradiction_review.get('count', 0)))}`",
+    ])
+    contradiction_items = [as_dict(x) for x in as_list(contradiction_review.get("items"))]
+    if contradiction_items:
+        for item in contradiction_items[:10]:
+            lines.append(
+                f"- **{maybe_redact(str(item.get('category', 'unknown')))} / {maybe_redact(str(item.get('severity', 'unknown')))}：** "
+                f"{maybe_redact_zh(str(item.get('statement', '')))} | 证据："
+                f"{zh_evidence_refs(as_list(item.get('evidence_ids')))}"
+            )
+    else:
+        lines.append("- 本轮未记录到结构化矛盾信号。")
 
     lines.extend([
         "## 覆盖范围与误报控制",

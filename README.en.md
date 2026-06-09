@@ -2,7 +2,7 @@
 
 [中文说明](README.md)
 
-A read-only Linux mining-incident troubleshooting skill focused on scene reconstruction and traceable reporting.
+A read-only Linux compromise, mining-malware, persistence, and local-privesc-exposure troubleshooting skill focused on scene reconstruction and traceable reporting.
 
 This repository is a **skill package**, not a manual CLI playbook. In normal usage, the model invokes the skill and the skill orchestrates scripts internally.
 
@@ -11,11 +11,15 @@ This repository is a **skill package**, not a manual CLI playbook. In normal usa
 - Minimum disruption: read-only first.
 - Evidence first: collect before concluding.
 - Confidence-gated output: observed fact / inference / attribution.
-- Approval-gated changes: no state change without explicit approval.
+- Scope can be narrowed: intrusion-only, mining-only, malware-only, persistence-only, or privilege-escalation-only review.
+- Approval-gated changes: no state change without explicit approval, and remediation stays out of scope by default.
 
 ## Typical Use Cases
 
 - Suspicious CPU/GPU load with possible mining activity.
+- "Only check whether this host was breached and what the attacker did."
+- "Only check mining malware, pools, wallets, persistence, and dropped files."
+- "Only check sudo / CopyFail / DirtyFrag local-privesc exposure, but stay read-only."
 - Suspected disguised miner process/service/startup path.
 - Business host triage requiring low-impact and high traceability.
 - Missing/deleted logs where fallback evidence is required.
@@ -27,20 +31,25 @@ Call the skill in natural language. No need to run workflow scripts manually:
 - `$mining-host-troubleshooter Investigate <HOST_IP>, account <REMOTE_USER>, password <PASSWORD>, focus on GPU mining`
 - `$mining-host-troubleshooter Run local read-only triage and export Chinese + English reports`
 - `$mining-host-troubleshooter Compare this case against previous cases and rate confidence`
+- `$mining-host-troubleshooter Only check whether this host was compromised and reconstruct attacker activity, read-only only`
+- `$mining-host-troubleshooter Only review local privilege-escalation exposure around sudo, CopyFail, and DirtyFrag, no exploit validation`
 
 You can add control constraints directly in plain language:
 
 - "Read-only only. No changes."
 - "If any kill/stop/delete is needed, explain impact/rollback first and wait for approval."
 - "Keep traceable IPs visible in internal reports."
+- "Only investigate intrusion. Do not move into remediation."
+- "Only assess local-privesc exposure and traces. Stay read-only."
 
 ## Internal Investigation Flow
 
 1. **Trust Bootstrap**: verify target identity and SSH trust chain.
-2. **Readonly Sweep**: low-impact collection with timeout and fallback paths.
-3. **Deep Correlation**: correlate process/network/persistence/container/cloud/GPU evidence.
-4. **Confidence-Gated Conclusion**: output confirmed vs inconclusive without fabrication.
-5. **Approval-Gated Response**: provide response plan only; no automatic mutation.
+2. **Distro First**: identify distro family, kernel, package-manager family, and actual privilege scope first.
+3. **Readonly Sweep**: low-impact collection with timeout and fallback paths.
+4. **Deep Correlation**: correlate process/network/persistence/container/cloud/GPU/local-privesc evidence, including small behavioral differences.
+5. **Confidence-Gated Conclusion**: output confirmed vs inconclusive without fabrication.
+6. **Approval-Gated Response**: provide response plan only; no automatic mutation.
 
 ## Key Auto-Parsing Capabilities
 
@@ -49,6 +58,9 @@ You can add control constraints directly in plain language:
 - Parses suspicious runtime commands from systemd `ExecStart` and cron/crontab entries.
 - Uses multi-path read-only GPU probing instead of relying on `nvidia-smi` alone, combining `lspci`, `lshw`, `/dev/dri`, `/sys/class/drm`, `/proc/driver/nvidia`, `rocm-smi`, and related surfaces when present.
 - Captures command-missing/fallback markers and makes visibility limits explicit in reports.
+- Detects distro/kernel/package identity early so log locations and package evidence can be interpreted correctly.
+- Pivots to `wtmp`, `btmp`, `lastlog`, journald/rsyslog metadata, package history, shell traces, and `/proc/*/exe (deleted)` when primary logs are missing or tampered with.
+- Adds read-only local-privesc exposure review surfaces for recent sudo and kernel issues such as `CopyFail` and `DirtyFrag`, without running exploit validation.
 - Surfaces runtime profile highlights at the beginning of reports to reduce manual triage time.
 - Forces a leadership-facing conclusion matrix near the top of the standalone report, split into observed fact / inference / attribution with confidence labels.
 
@@ -187,6 +199,10 @@ These actions must always be explicitly approved first:
 - delete/move files
 - modify startup/config
 - reboot or interrupt business workloads
+
+Additional boundary:
+
+- Even if the operator asks for `kill`, `stop`, `delete`, `restart`, or remediation in the same request, this skill still stays in read-only evidence-collection mode and records those actions as later approval-gated follow-up items.
 
 ## Maintainer Notes
 

@@ -70,6 +70,10 @@ def build_collect_cmd(args: argparse.Namespace, collect_script: Path) -> list[st
     add_arg(cmd, "--os-hint", args.os_hint)
     add_arg(cmd, "--mining-mode", args.mining_mode)
     add_arg(cmd, "--expected-workload", args.expected_workload)
+    add_arg(cmd, "--request-summary", args.request_summary)
+    for focus in args.focus or []:
+        if str(focus).strip():
+            cmd.extend(["--focus", str(focus).strip()])
     add_arg(cmd, "--remote", args.remote)
     if args.port:
         cmd.extend(["--port", str(args.port)])
@@ -407,6 +411,8 @@ def build_workflow_profile_summary(args: argparse.Namespace) -> dict:
         "scene_preservation_required": True,
         "same_host_comparison_default": True,
         "remote_trust_required": True,
+        "requested_focus": [str(x).strip() for x in (getattr(args, "focus", []) or []) if str(x).strip()],
+        "request_summary": str(getattr(args, "request_summary", "") or "").strip(),
         "recommended_order": order,
         "baseline_path": str(getattr(args, "baseline", "") or ""),
         "warnings": warnings,
@@ -429,6 +435,8 @@ def main() -> int:
     parser.add_argument("--os-hint", help="OS hint.")
     parser.add_argument("--mining-mode", choices=["auto", "gpu", "cpu", "mixed"], default="auto")
     parser.add_argument("--expected-workload", help="Declared legitimate high-compute workload for false-positive control.")
+    parser.add_argument("--focus", action="append", help="Requested investigation focus, repeatable or comma-separated.")
+    parser.add_argument("--request-summary", help="Sanitized user request summary recorded in case metadata.")
     parser.add_argument("--remote", help="Remote target in user@host format.")
     parser.add_argument("--remote-user", help="Remote SSH username (shortcut with --remote-ip).")
     parser.add_argument("--remote-ip", help="Remote host or IP (shortcut with --remote-user).")

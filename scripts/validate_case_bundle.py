@@ -63,10 +63,28 @@ def validate_case(case_dir: Path, evidence_path: Path) -> dict[str, Any]:
     ip_traces = [as_dict(x) for x in as_list(data.get("ip_traces"))]
     log_integrity = [as_dict(x) for x in as_list(data.get("log_integrity"))]
     timeline = [as_dict(x) for x in as_list(data.get("timeline"))]
+    investigation_scope = as_dict(data.get("investigation_scope"))
+    collection_constraints = as_dict(data.get("collection_constraints"))
 
     for key in ("case_id", "host_id", "collector_version", "timezone", "report_timezone_basis"):
         if not str(data.get(key, "")).strip():
             warnings.append(f"Top-level field missing or empty: {key}")
+
+    if not investigation_scope:
+        warnings.append("investigation_scope missing; requested focus and read-only contract are not recorded in top-level evidence JSON.")
+    else:
+        if not as_list(investigation_scope.get("requested_focus")):
+            warnings.append("investigation_scope.requested_focus missing or empty.")
+        if investigation_scope.get("readonly_only") is not True:
+            errors.append("investigation_scope.readonly_only must be true for this skill.")
+        if investigation_scope.get("state_change_allowed") is not False:
+            errors.append("investigation_scope.state_change_allowed must be false for this skill's default workflow.")
+
+    if collection_constraints:
+        if collection_constraints.get("readonly_only") is not True:
+            errors.append("collection_constraints.readonly_only must be true when present.")
+        if collection_constraints.get("external_tool_download_attempted") not in {False, "no", "false"}:
+            warnings.append("collection_constraints.external_tool_download_attempted is not explicitly false/no.")
 
     if not evidence_items:
         errors.append("No evidence entries in evidence JSON.")
@@ -120,8 +138,14 @@ def validate_case(case_dir: Path, evidence_path: Path) -> dict[str, Any]:
             warnings.append("Timeline entry missing normalized_time_utc.")
 
     remote_trust = as_dict(data.get("remote_trust"))
+    scene_reconstruction = as_dict(data.get("scene_reconstruction"))
     if str(as_dict(data.get("host")).get("ip", "")).strip() not in {"", "127.0.0.1"} and not remote_trust:
         warnings.append("remote_trust metadata missing for non-local collection.")
+
+    contradiction_review = as_dict(scene_reconstruction.get("contradiction_review"))
+    if contradiction_review:
+        if not str(contradiction_review.get("deception_risk_level", "")).strip():
+            warnings.append("scene_reconstruction.contradiction_review.deception_risk_level missing.")
 
     for ip_item in ip_traces:
         ip = str(ip_item.get("ip", "unknown"))

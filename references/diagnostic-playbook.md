@@ -1,10 +1,11 @@
 ﻿# Diagnostic Playbook
 
-Incident-triage-first playbook for suspected mining compromise on Linux hosts.
+Incident-triage-first playbook for Linux compromise review, mining-malware review, and scene reconstruction.
 
-This document is for scene reconstruction and traceability.
+This document is for scene reconstruction, truth recovery from evidence, and traceability.
 
 It is not the default playbook for hashrate tuning, pool optimization, or generic mining performance work.
+It is not a remediation playbook.
 
 ## Stage 1) Trust Bootstrap
 
@@ -27,12 +28,13 @@ python scripts/run_readonly_workflow.py ... --strict-report
 
 Focus on:
 
-1. command-path trust
-2. privilege level
+1. distro, kernel, package-manager family, and actual privilege level
+2. command-path trust
 3. current processes and sockets
 4. auth evidence
 5. persistence surfaces
 6. container and cloud surfaces
+7. local-privesc exposure surfaces when the case scope requires it
 
 ## Stage 3) Log Survivability and Fallbacks
 
@@ -44,6 +46,7 @@ Downgrade confidence if:
 1. primary auth logs are missing
 2. journal storage is absent or truncated
 3. shell history or login databases are destroyed
+4. distro-expected log paths are absent and no strong substitute exists
 
 ## Stage 4) Deep Evidence and Hypothesis Matrix
 
@@ -64,6 +67,8 @@ Required review surfaces:
 3. `/tmp`, `/var/tmp`, `/dev/shm`, cache and user startup paths
 4. Docker, K8s, cloud-init, metadata-service traces
 5. weak-credential and SSH-key access paths
+6. sudo version, kernel/package exposure, userns/sysctl/module state, and related local-privesc review surfaces
+7. subtle differences across paths, hashes, unit fragments, cron schedules, sudoers/PAM lines, and same-host historical baselines
 
 ## Stage 5) Confidence-Gated Conclusions
 
@@ -73,6 +78,8 @@ Rules:
 2. do not convert IOC keyword matches into attribution by themselves
 3. reduce attribution confidence when primary logs are missing or trust bootstrap is weak
 4. keep untraceable IPs explicitly marked as untraceable
+5. treat vulnerable package or kernel status as exposure evidence, not proof of exploitation
+6. only call a local privilege-escalation path plausible when exposure indicators and surrounding evidence support that reconstruction
 
 ## Stage 6) Approval-Gated Response Plan
 
@@ -85,6 +92,12 @@ Output only:
 3. traceability status
 4. unknowns and gaps
 5. optional response plan requiring explicit approval
+
+If the user asks for kill/stop/delete/restart in the same request:
+
+1. keep the current run read-only
+2. finish evidence collection first
+3. record remediation as a later approval-gated step
 
 ## External Evidence Interfaces
 

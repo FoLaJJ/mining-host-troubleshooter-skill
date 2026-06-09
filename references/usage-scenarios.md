@@ -22,6 +22,18 @@ python scripts/run_readonly_workflow.py   --remote <REMOTE_USER>@<HOST_IP>   --h
 python scripts/run_readonly_workflow.py   --analyst <ANALYST>   --host-name <HOST_NAME>   --host-ip <HOST_IP>   --os-hint "<OS_HINT>"   --mining-mode cpu   --profile enterprise-self-audit   --strict-report
 ```
 
+## Scenario 3A: Intrusion-Only Read-Only Review
+
+```bash
+python scripts/run_readonly_workflow.py   --analyst <ANALYST>   --remote <REMOTE_USER>@<HOST_IP>   --identity <SSH_KEY_PATH>   --host-ip <HOST_IP>   --focus intrusion-review   --focus malware-review   --request-summary "Only verify whether the host was compromised, what the attacker did, and what was planted. Read-only only."   --profile enterprise-self-audit   --strict-report
+```
+
+## Scenario 3B: Local Privilege-Escalation Exposure Review
+
+```bash
+python scripts/run_readonly_workflow.py   --analyst <ANALYST>   --remote <REMOTE_USER>@<HOST_IP>   --identity <SSH_KEY_PATH>   --host-ip <HOST_IP>   --focus privilege-escalation-review   --request-summary "Only assess sudo, CopyFail, and DirtyFrag exposure in read-only mode."   --profile enterprise-self-audit   --strict-report
+```
+
 ## Scenario 4: Build a Same-Host Clean Baseline
 
 ```bash

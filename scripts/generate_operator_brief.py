@@ -54,6 +54,8 @@ def evidence_links(evidence_ids: list[Any], limit: int = 4) -> str:
 
 def build_brief_payload(data: dict[str, Any]) -> dict[str, Any]:
     scene = as_dict(data.get("scene_reconstruction"))
+    scope = as_dict(data.get("investigation_scope") or scene.get("investigation_scope"))
+    lpe = as_dict(scene.get("local_privesc_review"))
     matrix = [as_dict(x) for x in as_list(data.get("hypothesis_matrix"))]
     findings = [as_dict(x) for x in as_list(data.get("findings"))]
     ip_traces = [as_dict(x) for x in as_list(data.get("ip_traces"))]
@@ -101,6 +103,7 @@ def build_brief_payload(data: dict[str, Any]) -> dict[str, Any]:
         "incident_id": str(incident.get("id", "unknown")),
         "host_name": str(host.get("name", "unknown")),
         "host_ip": str(host.get("ip", "unknown")),
+        "requested_focus": [str(x).strip() for x in as_list(scope.get("requested_focus")) if str(x).strip()],
         "risk_level": level,
         "verdict": verdict,
         "direct_hits": direct_hits,
@@ -113,6 +116,7 @@ def build_brief_payload(data: dict[str, Any]) -> dict[str, Any]:
         "auth_source_ips": as_list(scene.get("auth_source_ips")),
         "gpu_suspicious_process_count": gpu_hits,
         "gpu_peak_utilization_percent": safe_int(scene.get("gpu_peak_utilization_percent", 0)),
+        "possible_lpe_cves": as_list(lpe.get("possible_cves")),
     }
 
 
@@ -126,12 +130,14 @@ def build_zh_md(payload: dict[str, Any], expected_workload: str) -> str:
         "",
         "## 一句话结论",
         f"- **{payload['verdict']}**",
+        f"- 排查焦点：`{', '.join(payload['requested_focus']) or 'general-compromise-review'}`",
         "",
         "## 为什么是这个结论",
         f"- 直接运行时命中（进程/网络/GPU）：`{payload['direct_hits']}`",
         f"- 复核面命中（访问/容器云/内核）：`{payload['review_hits']}`",
         f"- 日志完整性风险：`{payload['log_risk_count']}`",
         f"- GPU 可疑进程数量：`{payload['gpu_suspicious_process_count']}`（峰值利用率：`{payload['gpu_peak_utilization_percent']}%`）",
+        f"- 可能的本地提权 CVE：`{', '.join(str(x) for x in payload['possible_lpe_cves']) or '未直接命中'}`",
         f"- 预期业务负载：`{expected_workload or '未提供'}`",
         "",
         "## 溯源现状",
@@ -179,12 +185,14 @@ def build_en_md(payload: dict[str, Any], expected_workload: str) -> str:
         "",
         "## One-Line Verdict",
         f"- **{payload['verdict']}**",
+        f"- Requested focus: `{', '.join(payload['requested_focus']) or 'general-compromise-review'}`",
         "",
         "## Why",
         f"- Direct runtime hits (process/network/GPU): `{payload['direct_hits']}`",
         f"- Review-surface hits (access/container-cloud/kernel): `{payload['review_hits']}`",
         f"- Log-integrity risks: `{payload['log_risk_count']}`",
         f"- Suspicious GPU process count: `{payload['gpu_suspicious_process_count']}` (peak utilization `{payload['gpu_peak_utilization_percent']}%`)",
+        f"- Possible local-privesc CVEs: `{', '.join(str(x) for x in payload['possible_lpe_cves']) or 'no direct hit'}`",
         f"- Expected workload: `{expected_workload or 'not provided'}`",
         "",
         "## Traceability Status",
@@ -231,4 +239,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
