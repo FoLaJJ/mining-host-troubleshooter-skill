@@ -44,6 +44,38 @@ class GenerateOperatorBriefTests(unittest.TestCase):
         self.assertIn("./soc-summary.md", en)
         self.assertNotIn("../reports/soc-summary.md", en)
 
+    def test_operator_brief_prefers_second_pass_adjusted_log_risk_count(self) -> None:
+        data = {
+            "scene_reconstruction": {
+                "process_ioc_match_count": 0,
+                "network_ioc_hit_count": 0,
+                "gpu_suspicious_process_count": 0,
+                "initial_access_review_hit_count": 0,
+                "container_cloud_review_hit_count": 0,
+                "kernel_review_hit_count": 0,
+                "gpu_peak_utilization_percent": 0,
+                "auth_source_ips": [],
+                "local_privesc_review": {},
+            },
+            "investigation_scope": {"requested_focus": ["intrusion-review"]},
+            "ip_traces": [],
+            "log_integrity": [
+                {"artifact": "/var/log/secure", "status": "missing"},
+                {"artifact": "/var/log/messages", "status": "missing"},
+            ],
+            "second_pass_review": {
+                "log_layout_review": {
+                    "adjusted_primary_log_risk_count": 0,
+                }
+            },
+            "host": {"name": "host-1", "ip": "1.2.3.4"},
+            "incident": {"id": "INC-1"},
+        }
+
+        payload = generate_operator_brief.build_brief_payload(data)
+        self.assertEqual(payload["log_risk_count"], 0)
+        self.assertEqual(payload["risk_level"], "low")
+
 
 if __name__ == "__main__":
     unittest.main()

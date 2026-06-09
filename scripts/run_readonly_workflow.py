@@ -387,6 +387,7 @@ def build_workflow_profile_summary(args: argparse.Namespace) -> dict:
             "trust_bootstrap",
             "low_impact_readonly_sweep",
             "deep_evidence_hypothesis_matrix",
+            "second_pass_case_review",
             "confidence_gated_conclusions",
             "validation_gate",
             "same_host_baseline_assessment",
@@ -491,6 +492,7 @@ def main() -> int:
     log_script = script_dir / "check_log_integrity.py"
     collect_script = script_dir / "collect_live_evidence.py"
     enrich_script = script_dir / "enrich_case_evidence.py"
+    review_script = script_dir / "review_case_evidence.py"
     validate_script = script_dir / "validate_case_bundle.py"
     compare_script = script_dir / "compare_case_bundles.py"
     baseline_script = script_dir / "apply_host_baseline.py"
@@ -557,6 +559,23 @@ def main() -> int:
             write_meta_json(case_dir, "enrichment.local.json", json.dumps({"output": enrich_out}, ensure_ascii=False))
             export_scene_reconstruction(case_dir, evidence_for_next)
             write_checkpoint(case_dir, "deep_evidence_hypothesis_matrix_complete", extra={"evidence_path": evidence_for_next})
+            review_cmd = [
+                sys.executable,
+                str(review_script),
+                "--input",
+                evidence_for_next,
+                "--output",
+                evidence_for_next,
+                "--case-dir",
+                case_dir,
+            ]
+            code, review_out = run_step("review_case_evidence", review_cmd)
+            if code != 0:
+                print("[ERROR] review_case_evidence failed", file=sys.stderr)
+                return code
+            write_meta_json(case_dir, "secondary_review.local.json", json.dumps({"output": review_out}, ensure_ascii=False))
+            export_scene_reconstruction(case_dir, evidence_for_next)
+            write_checkpoint(case_dir, "second_pass_case_review_complete", extra={"evidence_path": evidence_for_next})
         else:
             msg = "[ERROR] enrich_case_evidence failed" if args.require_enrich else "[WARN] enrich_case_evidence failed; continuing with raw evidence"
             print(msg, file=sys.stderr)

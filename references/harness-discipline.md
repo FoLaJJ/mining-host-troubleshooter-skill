@@ -173,6 +173,25 @@ Before finalizing any report or answer, verify:
 10. dual-use remote-control tools are kept neutral unless abnormal use is evidenced
 11. unknowns and collection limits are stated plainly
 
+## Second-Pass Self-Review Gate
+
+Do not finalize the first report until this second-pass gate is complete.
+
+Required checks:
+
+1. Re-check whether the current accepted-login sources could simply be the active investigation session or recurring administration.
+2. Re-check whether the distro-specific log layout makes any "missing log" finding non-applicable.
+3. Re-check whether the recovered timeline is wide enough and normalized enough to support the story being told.
+4. Re-check whether current persistence lines are only vendor-managed, baseline, or identity-surface lines rather than true foothold indicators.
+5. Re-check whether local-privesc evidence is only exposure, not confirmed use.
+6. Re-check which external or cross-host pivots are still required before stronger attribution or closure.
+
+Output rule:
+
+1. If the second pass downgrades a claim, keep the downgrade.
+2. If the second pass leaves open gaps, show them explicitly in the report.
+3. Do not hide open gaps just because the overall scene still looks suspicious.
+
 ## Anti-Patterns
 
 Do not do the following:

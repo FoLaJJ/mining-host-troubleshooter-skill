@@ -54,6 +54,9 @@ def evidence_links(evidence_ids: list[Any], limit: int = 4) -> str:
 
 def build_brief_payload(data: dict[str, Any]) -> dict[str, Any]:
     scene = as_dict(data.get("scene_reconstruction"))
+    second_pass = as_dict(data.get("second_pass_review") or scene.get("second_pass_review"))
+    log_layout_review = as_dict(second_pass.get("log_layout_review") or scene.get("log_layout_review"))
+    persistence_review = as_dict(second_pass.get("persistence_surface_review") or scene.get("persistence_surface_review"))
     scope = as_dict(data.get("investigation_scope") or scene.get("investigation_scope"))
     lpe = as_dict(scene.get("local_privesc_review"))
     matrix = [as_dict(x) for x in as_list(data.get("hypothesis_matrix"))]
@@ -66,16 +69,22 @@ def build_brief_payload(data: dict[str, Any]) -> dict[str, Any]:
     process_hits = safe_int(scene.get("process_ioc_match_count", 0))
     network_hits = safe_int(scene.get("network_ioc_hit_count", 0))
     gpu_hits = safe_int(scene.get("gpu_suspicious_process_count", 0))
-    access_hits = safe_int(scene.get("initial_access_review_hit_count", 0))
+    access_hits = (
+        safe_int(persistence_review.get("high_signal_count", 0))
+        + safe_int(persistence_review.get("policy_signal_count", 0))
+    ) or safe_int(scene.get("initial_access_review_hit_count", 0))
     container_hits = safe_int(scene.get("container_cloud_review_hit_count", 0))
     kernel_hits = safe_int(scene.get("kernel_review_hit_count", 0))
     direct_hits = process_hits + network_hits + gpu_hits
     review_hits = access_hits + container_hits + kernel_hits
-    log_risk_count = sum(
-        1
-        for item in log_integrity
-        if str(item.get("status", "")).strip().lower() in {"missing", "tampered", "suspicious"}
-    )
+    if "adjusted_primary_log_risk_count" in log_layout_review:
+        log_risk_count = safe_int(log_layout_review.get("adjusted_primary_log_risk_count", 0))
+    else:
+        log_risk_count = sum(
+            1
+            for item in log_integrity
+            if str(item.get("status", "")).strip().lower() in {"missing", "tampered", "suspicious"}
+        )
 
     if direct_hits > 0:
         verdict = "高疑似：存在直接运行时指标，建议按入侵事件继续处置。"

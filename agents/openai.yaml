@@ -6,7 +6,10 @@ interface:
     focus such as intrusion, mining, malware, persistence, or local privilege
     escalation review. Detect distro and version first, pivot correctly when
     logs are missing, and verify command trust before relying on suspicious core
-    command output. Keep primary conclusions conservative: separate
+    command output. Run a mandatory second-pass self-review before final
+    reporting: re-check timeline quality, scope closure, distro-aware log
+    layout, false-positive risks, and required external pivots. Keep primary
+    conclusions conservative: separate
     observed_fact, inference, and attribution; require concrete evidence IDs for
     every key conclusion; treat weak clues as inconclusive investigative leads;
     treat dual-use remote-control tools as observed presence unless abnormal

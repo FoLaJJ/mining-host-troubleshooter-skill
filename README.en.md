@@ -49,8 +49,9 @@ You can add control constraints directly in plain language:
 2. **Distro First**: identify distro family, kernel, package-manager family, and actual privilege scope first.
 3. **Readonly Sweep**: low-impact collection with timeout and fallback paths.
 4. **Deep Correlation**: correlate process/network/persistence/container/cloud/GPU/local-privesc evidence, including small behavioral differences.
-5. **Confidence-Gated Conclusion**: output confirmed vs inconclusive without fabrication.
-6. **Approval-Gated Response**: provide response plan only; no automatic mutation.
+5. **Second-Pass Self-Review**: re-check timeline quality, scope closure, distro-aware log layout, false-positive risk, and required external pivots before reporting.
+6. **Confidence-Gated Conclusion**: output confirmed vs inconclusive without fabrication.
+7. **Approval-Gated Response**: provide response plan only; no automatic mutation.
 
 ## Key Auto-Parsing Capabilities
 
@@ -64,6 +65,8 @@ You can add control constraints directly in plain language:
 - Detects distro/kernel/package identity early so log locations and package evidence can be interpreted correctly.
 - Pivots to `wtmp`, `btmp`, `lastlog`, journald/rsyslog metadata, package history, shell traces, and `/proc/*/exe (deleted)` when primary logs are missing or tampered with.
 - Adds read-only local-privesc exposure review surfaces for recent sudo and kernel issues such as `CopyFail` and `DirtyFrag`, without running exploit validation.
+- Runs a second-pass review before final reporting so current operator sessions, vendor-managed startup lines, distro-inapplicable log paths, and mere vulnerability exposure do not get overstated as attacker behavior.
+- Produces explicit external-evidence and cross-host pivots when host-only evidence is not enough to close ingress, lateral-movement, or attribution gaps.
 - Surfaces runtime profile highlights at the beginning of reports to reduce manual triage time.
 - Forces a leadership-facing conclusion matrix near the top of the standalone report, split into observed fact / inference / attribution with confidence labels.
 
@@ -131,11 +134,13 @@ Roles of the main outputs:
 |   |-- harness-discipline.md
 |   |-- log-loss-fallbacks.md
 |   |-- os-compatibility.md
+|   |-- second-pass-review.md
 |   `-- skill-maintenance.md
 |-- scripts/
 |   |-- run_readonly_workflow.py
 |   |-- collect_live_evidence.py
 |   |-- enrich_case_evidence.py
+|   |-- review_case_evidence.py
 |   |-- export_investigation_report.py
 |   |-- nl_control.py
 |   |-- generate_operator_brief.py
@@ -156,6 +161,7 @@ Key files:
 - `scripts/run_readonly_workflow.py`: orchestrates end-to-end workflow.
 - `scripts/collect_live_evidence.py`: read-only collection engine with fallback probes.
 - `scripts/enrich_case_evidence.py`: evidence correlation and timeline reconstruction.
+- `scripts/review_case_evidence.py`: second-pass review layer for timeline quality, scope closure, distro-aware log interpretation, false-positive control, and external pivot tracking.
 - `scripts/export_investigation_report.py`: layered EN/ZH report export.
 - `scripts/nl_control.py`: natural-language request parser.
 - `scripts/generate_operator_brief.py`: novice-friendly operator summary.
@@ -163,6 +169,7 @@ Key files:
 - `references/`: playbooks, compatibility notes, fallback rules, maintenance guide.
 - `references/harness-discipline.md`: evidence-linking guardrails for weaker-model execution and noisy scenes.
 - `references/dual-use-remote-tool-review.md`: keeps remote-control software review factual when authorization is unclear.
+- `references/second-pass-review.md`: mandatory second-pass gates before the skill is allowed to overstate closure.
 
 ## Installation
 

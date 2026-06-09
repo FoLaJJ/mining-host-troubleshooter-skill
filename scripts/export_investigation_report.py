@@ -38,6 +38,31 @@ def as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def derive_platform_os_name(host_os: str, platform_identity: dict[str, Any]) -> str:
+    host_value = str(host_os or "").strip()
+    if host_value and host_value.lower() != "unknown":
+        return host_value
+    parts = [
+        str(platform_identity.get("os_release_id", "")).strip(),
+        str(platform_identity.get("os_release_version", "")).strip(),
+        str(platform_identity.get("os_release_codename", "")).strip(),
+    ]
+    derived = " ".join(part for part in parts if part).strip()
+    return derived or "unknown"
+
+
+def adjusted_log_risk_count(data: dict[str, Any], log_integrity: list[dict[str, Any]]) -> int:
+    second_pass = as_dict(data.get("second_pass_review"))
+    log_layout = as_dict(second_pass.get("log_layout_review"))
+    if "adjusted_primary_log_risk_count" in log_layout:
+        return safe_int(log_layout.get("adjusted_primary_log_risk_count", 0))
+    return sum(
+        1
+        for item in log_integrity
+        if str(item.get("status", "")).strip().lower() in {"missing", "tampered", "suspicious"}
+    )
+
+
 def mask_ip(ip: str) -> str:
     m = re.fullmatch(r"(\d{1,3}\.){3}\d{1,3}", ip.strip())
     if not m:
@@ -255,6 +280,76 @@ def claim_type_label(value: str) -> str:
     }.get(normalize_claim_type(value), "Inference")
 
 
+def second_pass_pivot_label(value: str) -> str:
+    return {
+        "identity_boundary_logs": "Identity / boundary authentication logs",
+        "peer_host_internal_auth_pivot": "Peer-host / internal-auth pivot review",
+        "cloud_control_plane_audit": "Cloud / container control-plane audit",
+        "boundary_telemetry_for_log_loss": "Boundary telemetry for reduced host-log visibility",
+        "timeline_expansion": "Timeline expansion",
+        "contradiction_resolution": "Cross-source contradiction resolution",
+        "privesc_change_records": "Priv-esc admin-change corroboration",
+    }.get(str(value).strip(), str(value).strip() or "unknown")
+
+
+def second_pass_pivot_label_zh_cn(value: str) -> str:
+    return {
+        "identity_boundary_logs": "身份与边界认证日志补证",
+        "peer_host_internal_auth_pivot": "同环境主机与内网认证支点复核",
+        "cloud_control_plane_audit": "云与容器控制面审计补证",
+        "boundary_telemetry_for_log_loss": "日志缺失场景下的边界遥测补证",
+        "timeline_expansion": "时间线扩窗复核",
+        "contradiction_resolution": "跨来源矛盾消解",
+        "privesc_change_records": "本地提权变更记录补证",
+    }.get(str(value).strip(), str(value).strip() or "未知")
+
+
+def timeline_review_label(value: str) -> str:
+    return {
+        "timeline_not_recovered": "timeline_not_recovered",
+        "timeline_not_normalized": "timeline_not_normalized",
+        "narrow_window": "timeline_window_narrow",
+        "normalized_window_present": "timeline_window_present",
+    }.get(str(value).strip(), str(value).strip() or "unknown")
+
+
+def timeline_review_label_zh_cn(value: str) -> str:
+    return {
+        "timeline_not_recovered": "未恢复出可用时间线",
+        "timeline_not_normalized": "时间线未完成可信 UTC 归一化",
+        "narrow_window": "时间线窗口偏窄",
+        "normalized_window_present": "时间线窗口可用",
+    }.get(str(value).strip(), str(value).strip() or "未知")
+
+
+def scope_closure_label(value: str) -> str:
+    return {
+        "needs_external_corroboration": "external_corroboration_needed",
+        "host_only_scope_sufficient_for_requested_focus": "host_only_scope_currently_sufficient",
+    }.get(str(value).strip(), str(value).strip() or "unknown")
+
+
+def scope_closure_label_zh_cn(value: str) -> str:
+    return {
+        "needs_external_corroboration": "仍需外部补证",
+        "host_only_scope_sufficient_for_requested_focus": "当前主机侧证据已可支撑本轮范围",
+    }.get(str(value).strip(), str(value).strip() or "未知")
+
+
+def workflow_review_status_label(value: str) -> str:
+    return {
+        "completed_ready_for_host_only_report": "host_only_report_ready",
+        "completed_with_open_gaps": "open_gaps_visible",
+    }.get(str(value).strip(), str(value).strip() or "unknown")
+
+
+def workflow_review_status_label_zh_cn(value: str) -> str:
+    return {
+        "completed_ready_for_host_only_report": "主机侧报告闭环条件已满足",
+        "completed_with_open_gaps": "仍有未闭环缺口",
+    }.get(str(value).strip(), str(value).strip() or "未知")
+
+
 def localize_auto_text_zh_cn(text: str) -> str:
     value = str(text or "").strip()
     if not value:
@@ -288,6 +383,22 @@ def localize_auto_text_zh_cn(text: str) -> str:
         "Prioritize runtime lineage, parent-child process review, wallet/pool traces, and persistence pivots.": "优先复核运行链路、父子进程关系、钱包或矿池痕迹，以及持久化支点。",
         "Prioritize surviving access traces, service startup context, container/cloud exposure, and deleted-log fallback artifacts.": "优先复核现存访问痕迹、服务启动上下文、容器或云侧暴露面，以及日志缺失后的替代证据。",
         "Expand time window, privilege visibility, and external telemetry correlation before closing the case.": "在结案前应继续扩展时间窗口、权限可见性，并补做外部遥测关联。",
+        "Second-pass review found no mandatory external corroboration gaps for the requested host-only scope.": "二轮复核认为，就当前指定的主机侧只读范围而言，没有发现必须追加的外部补证门槛。",
+        "Second-pass review kept explicit open gaps visible; do not over-close the case on host evidence alone.": "二轮复核保留了明确的未闭环缺口，不能仅凭主机侧证据把案件过度定性为已闭环。",
+        "No reconstructable timeline entries were recovered from current host evidence.": "当前主机证据中未恢复出可用于重建的时间线条目。",
+        "Timeline-like records exist, but no event time could be normalized into a defensible UTC sequence.": "虽然存在时间线相关记录，但尚无事件时间可被可信地归一化为 UTC 序列。",
+        "Recovered event timing is narrow and likely under-scopes earlier ingress or staging activity. Expand the time window before closing the case.": "已恢复的事件时间范围过窄，可能低估更早期的入口或准备阶段活动；在结案前应先扩展时间窗口。",
+        "Host-visible authentication sources exist, but authorization and upstream ingress still need non-host corroboration.": "主机侧已经看到认证来源，但其授权性与上游入口仍需结合主机外证据补证。",
+        "Private or internal authentication source IPs were observed and can indicate same-environment pivoting.": "已观察到私网或内网认证来源 IP，可能提示同环境横向支点。",
+        "Container or cloud review surfaces were present, so control-plane evidence is needed before closing ingress scope.": "已出现容器或云侧复核面，因此在关闭入口范围前仍需控制面证据补证。",
+        "Applicable host logs remain missing or suspicious; external telemetry is needed to compensate for reduced host visibility.": "适用的主机日志仍然缺失或可疑，需要借助外部遥测来弥补主机侧可见性下降。",
+        "Recovered event timing is incomplete for confident ingress reconstruction.": "当前恢复到的事件时间仍不足以高置信还原入口链路。",
+        "Cross-source contradictions remain and should be resolved before stronger attribution or closure.": "跨来源矛盾仍然存在，在做更强归因或结案前应先消解。",
+        "Local-privesc exposure remains in scope and needs package backport or admin change-history corroboration.": "本地提权暴露面仍在排查范围内，需要结合软件包回移修复信息或管理员变更记录补证。",
+        "Correlate fallback auth artifacts and external telemetry before treating missing logs as attacker-driven.": "在把日志缺失解释为攻击者行为前，应先关联替代认证证据与外部遥测。",
+        "Expand the UTC timeline using surviving artifacts and non-host telemetry before closing the ingress sequence.": "在关闭入口链路前，应先利用现存证据与主机外遥测扩展 UTC 时间线。",
+        "Review each high-signal startup or policy line directly by evidence ID before any containment step.": "在执行任何处置动作前，应先按证据 ID 逐条复核高信号启动项或策略项。",
+        "Validate package backport status and admin workflow before treating local-privesc exposure as exploit use.": "在把本地提权暴露面解释为已被利用前，应先核实软件包回移修复状态与管理员操作流程。",
         "yes": "是",
         "no": "否",
         "True": "是",
@@ -1172,11 +1283,7 @@ def key_risk_lines(data: dict[str, Any], case_dir: str | None = None) -> list[st
         for item in ip_traces
         if normalize_trace_status(str(item.get("trace_status", ""))) != "traced"
     )
-    log_risk_count = sum(
-        1
-        for item in log_integrity
-        if str(item.get("status", "")).strip().lower() in {"missing", "tampered", "suspicious"}
-    )
+    log_risk_count = adjusted_log_risk_count(data, log_integrity)
     lines = [
         f"- Findings confidence state: `{confirmed_count}` confirmed, `{inconclusive_count}` inconclusive.",
         f"- Traceability caveat: `{unknown_trace_count}` IP trace item(s) remain untraced or unknown.",
@@ -1198,11 +1305,7 @@ def key_risk_lines_zh_cn(data: dict[str, Any], case_dir: str | None = None) -> l
         for item in ip_traces
         if normalize_trace_status(str(item.get("trace_status", ""))) != "traced"
     )
-    log_risk_count = sum(
-        1
-        for item in log_integrity
-        if str(item.get("status", "")).strip().lower() in {"missing", "tampered", "suspicious"}
-    )
+    log_risk_count = adjusted_log_risk_count(data, log_integrity)
     return [
         f"- 结论状态：`{confirmed_count}` 条已确认，`{inconclusive_count}` 条仍为待定。",
         f"- 溯源提示：`{unknown_trace_count}` 条 IP 记录仍未完成溯源或状态未知。",
@@ -1277,6 +1380,13 @@ def confidence_emoji(value: str) -> str:
 
 def leadership_payload(ctx: dict[str, Any]) -> dict[str, Any]:
     scene = ctx["scene_reconstruction"]
+    second_pass = as_dict(ctx.get("second_pass_review"))
+    accepted_auth_review = as_dict(second_pass.get("accepted_auth_review") or scene.get("accepted_auth_review"))
+    persistence_review = as_dict(second_pass.get("persistence_surface_review") or scene.get("persistence_surface_review"))
+    log_layout_review = as_dict(second_pass.get("log_layout_review") or scene.get("log_layout_review"))
+    timeline_review = as_dict(second_pass.get("timeline_review") or scene.get("timeline_review"))
+    scope_closure_review = as_dict(second_pass.get("scope_closure_review") or scene.get("scope_closure_review"))
+    workflow_review = as_dict(second_pass.get("workflow_review") or scene.get("workflow_review"))
     timeline = sort_timeline_entries([as_dict(x) for x in as_list(ctx["timeline"])])
     runtime_profiles = [as_dict(x) for x in as_list(scene.get("runtime_profiles"))]
     malware_files = [as_dict(x) for x in as_list(scene.get("malware_file_candidates"))]
@@ -1288,7 +1398,6 @@ def leadership_payload(ctx: dict[str, Any]) -> dict[str, Any]:
     network_hits = [str(x) for x in as_list(scene.get("network_ioc_samples"))]
     access_hits = [str(x) for x in as_list(scene.get("initial_access_review_samples"))]
     container_hits = [str(x) for x in as_list(scene.get("container_cloud_review_samples"))]
-    log_risk = [as_dict(x) for x in as_list(ctx["log_integrity"]) if str(as_dict(x).get("status", "")).strip().lower() in {"missing", "tampered", "suspicious"}]
     internal_auth_ips = [ip for ip in auth_ips if is_private_ip(ip)]
 
     ingress_hypotheses: list[dict[str, str]] = []
@@ -1299,6 +1408,23 @@ def leadership_payload(ctx: dict[str, Any]) -> dict[str, Any]:
                 "label_zh": "SSH 凭据滥用仍是优先假设。",
                 "confidence": "medium",
                 "basis": f"failed={auth_counts.get('failed', 0)}, invalid={auth_counts.get('invalid', 0)}, auth_source_ips={', '.join(auth_ips[:6]) or '-'}",
+            }
+        )
+    accepted_sources = [as_dict(x) for x in as_list(accepted_auth_review.get("sources"))]
+    if accepted_sources:
+        ingress_hypotheses.append(
+            {
+                "label": (
+                    "Accepted login sources were re-reviewed. Some may reflect the current investigation session or recurring administration, "
+                    "but host-only evidence still cannot prove authorization."
+                ),
+                "label_zh": "已对 Accepted 登录来源做二轮复核：其中部分可能是当前排查会话或重复运维来源，但仅凭主机证据仍不能直接证明其已获授权。",
+                "confidence": "low",
+                "basis": (
+                    f"current_session_candidates={accepted_auth_review.get('current_session_candidate_count', 0)}, "
+                    f"recurring_sources={accepted_auth_review.get('recurring_source_count', 0)}, "
+                    f"authorization_unknown={accepted_auth_review.get('authorization_unknown_count', 0)}"
+                ),
             }
         )
     if "22" in listening_ports:
@@ -1348,7 +1474,15 @@ def leadership_payload(ctx: dict[str, Any]) -> dict[str, Any]:
         activity_summary.append(
             f"Runtime evidence shows miner-like execution via {p.get('executable', '-')}, algorithm={p.get('algorithm', '-')}, pool={p.get('pool', '-')}, proxy={p.get('proxy', '-')}, wallet={p.get('wallet', '-')}, password={p.get('password', '-')}, cpu_threads={p.get('cpu_threads', '-')}"
         )
-    if access_hits:
+    if str(persistence_review.get("status", "")) == "baseline_or_vendor_dominated":
+        activity_summary.append(
+            "Second-pass review found the current persistence review surfaces are dominated by vendor-managed startup lines or account metadata. That does not independently establish a malicious foothold."
+        )
+    elif str(persistence_review.get("status", "")) == "high_signal_present":
+        activity_summary.append(
+            f"Second-pass review kept persistence concern active because high-signal startup or privileged policy lines remain present: {compact_text(str(persistence_review.get('summary', '-')), max_len=220)}"
+        )
+    elif access_hits:
         activity_summary.append(f"Access or persistence review surfaces returned notable lines such as: {compact_text(access_hits[0], max_len=200)}")
     if network_hits:
         activity_summary.append(f"Network IOC review produced hits such as: {compact_text(network_hits[0], max_len=200)}")
@@ -1398,7 +1532,23 @@ def leadership_payload(ctx: dict[str, Any]) -> dict[str, Any]:
         "service_exposure": service_exposure,
         "lateral_status": lateral_status,
         "lateral_basis": lateral_basis,
-        "log_risk_count": len(log_risk),
+        "log_risk_count": safe_int(ctx["log_risk_count"]),
+        "log_layout_status": str(log_layout_review.get("status", "unknown")),
+        "log_layout_os_family": str(log_layout_review.get("os_family", "unknown")),
+        "log_layout_adjusted_count": safe_int(log_layout_review.get("adjusted_primary_log_risk_count", 0)),
+        "log_layout_raw_count": safe_int(log_layout_review.get("raw_primary_log_risk_count", 0)),
+        "log_layout_summary": str(log_layout_review.get("summary", "")),
+        "timeline_review_status": str(timeline_review.get("status", "unknown")),
+        "timeline_review_summary": str(timeline_review.get("summary", "")),
+        "timeline_normalized_event_count": safe_int(timeline_review.get("normalized_event_count", 0)),
+        "timeline_span_minutes": safe_int(timeline_review.get("time_span_minutes", 0)),
+        "scope_closure_status": str(scope_closure_review.get("status", "unknown")),
+        "scope_closure_summary": str(scope_closure_review.get("summary", "")),
+        "scope_external_pivots": [as_dict(x) for x in as_list(scope_closure_review.get("external_pivots"))[:6]],
+        "workflow_review_status": str(workflow_review.get("status", "unknown")),
+        "workflow_review_summary": str(workflow_review.get("summary", "")),
+        "workflow_closure_ready": bool(workflow_review.get("closure_ready_for_host_only_report")),
+        "workflow_closure_notes": [str(x) for x in as_list(workflow_review.get("closure_notes"))[:6]],
         "evidence_excerpt_ids": evidence_ids,
         "gpu_peak": safe_int(scene.get("gpu_peak_utilization_percent", 0)),
         "gpu_suspicious": safe_int(scene.get("gpu_suspicious_process_count", 0)),
@@ -1627,10 +1777,37 @@ def build_leadership_report(data: dict[str, Any], redact: bool, case_dir: str | 
             "## 🧾 Log Integrity",
             f"- **Risk Count:** `{payload['log_risk_count']}`",
             "- Missing or tampered logs reduce attribution confidence and require external telemetry correlation.",
-            "",
-            "## 🔗 Evidence Excerpts",
         ]
     )
+    if payload["log_layout_summary"]:
+        lines.append(f"- **Second-Pass Review:** {maybe_redact(payload['log_layout_summary'])}")
+    lines.extend(
+        [
+            "",
+            "## 🧪 Second-Pass Review",
+            f"- **Workflow Status:** `{workflow_review_status_label(payload['workflow_review_status'])}`",
+            f"- **Closure Posture:** `{'host_only_report_ready' if payload['workflow_closure_ready'] else 'open_gaps_visible'}`",
+            f"- **Timeline Review:** `{timeline_review_label(payload['timeline_review_status'])}` | normalized_events=`{payload['timeline_normalized_event_count']}` | span_minutes=`{payload['timeline_span_minutes']}`",
+            f"- **Scope Closure:** `{scope_closure_label(payload['scope_closure_status'])}`",
+        ]
+    )
+    if payload["workflow_review_summary"]:
+        lines.append(f"- **Second-Pass Summary:** {maybe_redact(payload['workflow_review_summary'])}")
+    if payload["timeline_review_summary"]:
+        lines.append(f"- **Timeline Note:** {maybe_redact(payload['timeline_review_summary'])}")
+    if payload["scope_closure_summary"]:
+        lines.append(f"- **Scope Note:** {maybe_redact(payload['scope_closure_summary'])}")
+    if payload["scope_external_pivots"]:
+        lines.append("- **Required External Or Cross-Host Pivots:**")
+        for item in payload["scope_external_pivots"]:
+            pivot_id = str(item.get("id", "")).strip()
+            reason = str(item.get("reason", "")).strip()
+            lines.append(f"  - `{second_pass_pivot_label(pivot_id)}`: {maybe_redact(reason or '-')}")
+    if payload["workflow_closure_notes"]:
+        lines.append("- **Closure Notes:**")
+        for item in payload["workflow_closure_notes"]:
+            lines.append(f"  - {maybe_redact(item)}")
+    lines.extend(["", "## 🔗 Evidence Excerpts"])
     evid_idx = ctx["evid_idx"]
     if payload["evidence_excerpt_ids"]:
         for evid in payload["evidence_excerpt_ids"]:
@@ -1790,10 +1967,58 @@ def build_leadership_report_zh_cn(data: dict[str, Any], redact: bool, case_dir: 
             "## 🧾 日志完整性",
             f"- **风险数量：** `{payload['log_risk_count']}`",
             "- 关键日志缺失或可疑时，攻击链归因置信度必须下调，并补拉外部遥测。",
-            "",
-            "## 🔗 必要证据摘录",
         ]
     )
+    if payload["log_layout_summary"]:
+        if payload["log_layout_status"] == "distro_layout_consistent":
+            lines.append(
+                f"- **二轮复核：** 已按 `{payload['log_layout_os_family'] or 'unknown'}` 发行版布局完成校正；不适用的日志路径已从风险统计中剔除。"
+            )
+        elif payload["log_layout_status"] == "reduced_visibility_on_expected_logs":
+            lines.append(
+                f"- **二轮复核：** 适用主日志仍有 `{payload['log_layout_adjusted_count']}` 项风险，关键日志缺口在复核后依然成立。"
+            )
+        else:
+            lines.append(f"- **二轮复核：** {maybe_redact(localize_auto_text_zh_cn(payload['log_layout_summary']))}")
+    lines.extend(
+        [
+            "",
+            "## 🧪 二轮复核",
+            f"- **工作流状态：** `{workflow_review_status_label_zh_cn(payload['workflow_review_status'])}`",
+            f"- **闭环姿态：** `{'当前主机侧报告可闭环' if payload['workflow_closure_ready'] else '仍有未闭环缺口'}`",
+            f"- **时间线复核：** `{timeline_review_label_zh_cn(payload['timeline_review_status'])}` | normalized_events=`{payload['timeline_normalized_event_count']}` | span_minutes=`{payload['timeline_span_minutes']}`",
+            f"- **范围闭环：** `{scope_closure_label_zh_cn(payload['scope_closure_status'])}`",
+        ]
+    )
+    if payload["workflow_review_summary"]:
+        lines.append(f"- **二轮复核摘要：** {maybe_redact(localize_auto_text_zh_cn(payload['workflow_review_summary']))}")
+    if payload["timeline_review_status"] == "normalized_window_present":
+        lines.append(
+            f"- **时间线说明：** 已恢复可用 UTC 序列，当前事件跨度约 `{payload['timeline_span_minutes']}` 分钟。主机侧可用于排序，但仍不能自动代表入口链完整。"
+        )
+    elif payload["timeline_review_summary"]:
+        lines.append(f"- **时间线说明：** {maybe_redact(localize_auto_text_zh_cn(payload['timeline_review_summary']))}")
+    if payload["scope_closure_status"] == "host_only_scope_sufficient_for_requested_focus":
+        lines.append("- **范围说明：** 当前主机侧证据已可支撑本轮指定范围，无强制性外部补证门槛。")
+    elif payload["scope_external_pivots"]:
+        lines.append(
+            f"- **范围说明：** 当前主机侧证据不足以闭合本轮范围，仍有 `{len(payload['scope_external_pivots'])}` 项外部或跨主机支点待补证。"
+        )
+    elif payload["scope_closure_summary"]:
+        lines.append(f"- **范围说明：** {maybe_redact(localize_auto_text_zh_cn(payload['scope_closure_summary']))}")
+    if payload["scope_external_pivots"]:
+        lines.append("- **必须补做的外部或跨主机支点：**")
+        for item in payload["scope_external_pivots"]:
+            pivot_id = str(item.get("id", "")).strip()
+            reason = str(item.get("reason", "")).strip()
+            lines.append(
+                f"  - `{second_pass_pivot_label_zh_cn(pivot_id)}`：{maybe_redact(localize_auto_text_zh_cn(reason) if reason else '-')}"
+            )
+    if payload["workflow_closure_notes"]:
+        lines.append("- **闭环备注：**")
+        for item in payload["workflow_closure_notes"]:
+            lines.append(f"  - {maybe_redact(localize_auto_text_zh_cn(item))}")
+    lines.extend(["", "## 🔗 必要证据摘录"])
     evid_idx = ctx["evid_idx"]
     if payload["evidence_excerpt_ids"]:
         for evid in payload["evidence_excerpt_ids"]:
@@ -2018,11 +2243,16 @@ def overall_confidence_posture(ctx: dict[str, Any]) -> str:
 
 def investigation_posture_payload(ctx: dict[str, Any]) -> dict[str, Any]:
     scene = ctx["scene_reconstruction"]
+    second_pass = as_dict(ctx.get("second_pass_review"))
+    persistence_review = as_dict(second_pass.get("persistence_surface_review") or scene.get("persistence_surface_review"))
     process_hits = safe_int(scene.get("process_ioc_match_count", 0))
     network_hits = safe_int(scene.get("network_ioc_hit_count", 0))
     gpu_hits = safe_int(scene.get("gpu_suspicious_process_count", 0))
     runtime_profile_hits = safe_int(scene.get("runtime_profile_count", 0))
-    access_hits = safe_int(scene.get("initial_access_review_hit_count", 0))
+    access_hits = (
+        safe_int(persistence_review.get("high_signal_count", 0))
+        + safe_int(persistence_review.get("policy_signal_count", 0))
+    ) or safe_int(scene.get("initial_access_review_hit_count", 0))
     container_hits = safe_int(scene.get("container_cloud_review_hit_count", 0))
     kernel_hits = safe_int(scene.get("kernel_review_hit_count", 0))
     unknown_trace_count = safe_int(ctx["trace_counts"].get("untraceable", 0)) + safe_int(
@@ -2502,6 +2732,7 @@ def prepare_report_context(
     local_privesc_review = as_dict(scene_reconstruction.get("local_privesc_review"))
     environment_constraints = as_dict(scene_reconstruction.get("environment_constraints") or data.get("collection_constraints"))
     contradiction_review = as_dict(scene_reconstruction.get("contradiction_review"))
+    second_pass_review = as_dict(data.get("second_pass_review") or scene_reconstruction.get("second_pass_review"))
     remote_trust = as_dict(data.get("remote_trust"))
     privilege_scope = as_dict(scene_reconstruction.get("privilege_scope"))
     time_norm = as_dict(scene_reconstruction.get("time_normalization"))
@@ -2554,11 +2785,7 @@ def prepare_report_context(
     trace_counts = {"traced": 0, "untraceable": 0, "unknown": 0}
     for item in ip_traces:
         trace_counts[normalize_trace_status(str(item.get("trace_status", "")))] += 1
-    log_risk_count = sum(
-        1
-        for item in log_integrity
-        if str(item.get("status", "")).strip().lower() in {"missing", "tampered", "suspicious"}
-    )
+    log_risk_count = adjusted_log_risk_count(data, log_integrity)
     pending_approval = sum(
         1 for item in actions if str(item.get("approval", "")).strip().lower() not in {"approved", "yes"}
     )
@@ -2588,6 +2815,7 @@ def prepare_report_context(
         "local_privesc_review": local_privesc_review,
         "environment_constraints": environment_constraints,
         "contradiction_review": contradiction_review,
+        "second_pass_review": second_pass_review,
         "remote_trust": remote_trust,
         "privilege_scope": privilege_scope,
         "time_norm": time_norm,
@@ -2600,7 +2828,7 @@ def prepare_report_context(
         "host_name": str(host.get("name", "unknown")),
         "host_ip": str(host.get("ip", "unknown")),
         "mining_mode": str(host.get("mining_mode", "unknown")),
-        "os_name": str(host.get("os", "unknown")),
+        "os_name": derive_platform_os_name(str(host.get("os", "unknown")), platform_identity),
         "summary": str(data.get("summary", "")).strip(),
         "expected_workload": str(data.get("expected_workload", "")).strip(),
         "report_timezone_basis": str(data.get("report_timezone_basis", data.get("timezone", "UTC"))).strip() or "UTC",

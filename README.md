@@ -49,8 +49,13 @@
 2. **Distro First**：先识别发行版、内核、包管理器、当前权限，明确 Ubuntu / Debian / CentOS / RHEL / Rocky / Alma 等差异。
 3. **Readonly Sweep**：执行低影响只读采集，带超时、检查点、降级兜底。
 4. **Deep Evidence Correlation**：关联进程、网络、持久化、容器、云线索、GPU 进程映射、本地提权暴露面、微小配置差异。
-5. **Confidence-Gated Conclusion**：按证据完整度输出 `confirmed` 或 `inconclusive`，禁止杜撰。
-6. **Approval-Gated Response**：仅输出处置建议，变更操作必须显式审批。
+5. **Second-Pass Self-Review**：在出报告前强制复核时间线质量、范围闭环、发行版日志布局、误报风险和外部补证支点。
+6. **Confidence-Gated Conclusion**：按证据完整度输出 `confirmed` 或 `inconclusive`，禁止杜撰。
+7. **Approval-Gated Response**：仅输出处置建议，变更操作必须显式审批。
+
+固定自动化顺序是：
+
+`collect -> enrich -> review -> validate -> export`
 
 ## 关键自动解析能力
 
@@ -66,6 +71,8 @@
 - 优先识别 Linux 发行版、内核版本、sudo/关键包版本，先知道证据应该放在哪里、应该怎么看。
 - 日志缺失时自动转向 `wtmp`、`btmp`、`lastlog`、journald/rsyslog 配置、service/timer 元数据、包管理历史、shell 痕迹、`/proc/*/exe (deleted)` 等替代证据。
 - 对近期本地提权暴露面做只读检测与合理怀疑链整理，关注 sudo 相关问题与 `CopyFail`、`DirtyFrag` 等内核暴露面，但不做利用验证。
+- 出正式报告前自动做第二轮自检，避免把当前排查会话、厂商托管启动项、发行版不适用日志路径、漏洞暴露面误写成攻击结论。
+- 自动给出“外部补证/跨主机支点”清单，提醒仍需拉取堡垒机、VPN、IdP、云审计、Kubernetes 审计、NAT/DNS 等证据时，不得把主机侧线索强行写成闭环事实。
 - 报告前部优先展示“运行参数画像”与高信号结论，减少人工翻全文成本。
 - 领导复核报告前部强制给出“观测事实 / 推断 / 归因”结论矩阵，并标注置信度。
 
@@ -133,11 +140,13 @@
 |   |-- harness-discipline.md
 |   |-- log-loss-fallbacks.md
 |   |-- os-compatibility.md
+|   |-- second-pass-review.md
 |   `-- skill-maintenance.md
 |-- scripts/
 |   |-- run_readonly_workflow.py
 |   |-- collect_live_evidence.py
 |   |-- enrich_case_evidence.py
+|   |-- review_case_evidence.py
 |   |-- export_investigation_report.py
 |   |-- nl_control.py
 |   |-- generate_operator_brief.py
@@ -159,6 +168,7 @@
 - `scripts/run_readonly_workflow.py`：主编排器，串起采集、富化、校验、导出。
 - `scripts/collect_live_evidence.py`：多路径只读采集（本地/远程、命令降级、超时控制）。
 - `scripts/enrich_case_evidence.py`：证据关联、时间线重建、假设矩阵生成。
+- `scripts/review_case_evidence.py`：二轮复核层，专门处理时间线质量、范围闭环、发行版日志布局、误报风险和外部补证支点。
 - `scripts/export_investigation_report.py`：导出中英文主报告与分层摘要。
 - `scripts/nl_control.py`：自然语言请求解析与参数映射。
 - `scripts/generate_operator_brief.py`：面向非安全同学的简报生成。
@@ -167,6 +177,7 @@
 - `references/harness-discipline.md`：给弱模型或复杂现场使用的证据关联护栏，强制区分主结论与待证实线索。
 - `references/dual-use-remote-tool-review.md`：处理向日葵、ToDesk 等双用途远控工具，避免把合法运维和攻击者借用混为一谈。
 - `references/deception-and-contradiction-review.md`：专门处理假信息、误导性日志和跨来源矛盾。
+- `references/second-pass-review.md`：明确二轮复核的必查门槛，约束模型在出报告前先做闭环检查。
 
 ## 安装
 

@@ -61,6 +61,8 @@ python scripts/collect_live_evidence.py   --remote <REMOTE_USER>@<HOST_IP>   --h
 
 python scripts/enrich_case_evidence.py   --input <case>/evidence/evidence.raw.json   --output <case>/evidence/evidence.reviewed.auto.json
 
+python scripts/review_case_evidence.py   --input <case>/evidence/evidence.reviewed.auto.json   --case-dir <case>
+
 python scripts/validate_case_bundle.py   --case-dir <case>   --input <case>/evidence/evidence.reviewed.auto.json   --strict
 
 python scripts/apply_host_baseline.py   --case-dir <case>   --baseline reports/_baselines/<host>-baseline-<timestamp>/baseline.json

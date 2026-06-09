@@ -9,6 +9,29 @@ from pathlib import Path
 from typing import Any
 
 
+PIVOT_LABELS = {
+    "identity_boundary_logs": "Pull bastion, VPN, IdP, jump-host, and boundary authentication logs for the same UTC window.",
+    "peer_host_internal_auth_pivot": "Review peer hosts, bastions, and management nodes related to internal/private authentication source IPs.",
+    "cloud_control_plane_audit": "Pull Kubernetes audit logs, registry pull history, cloud audit trails, and metadata-access telemetry.",
+    "boundary_telemetry_for_log_loss": "Pull SIEM, firewall, NAT, proxy, DNS, and snapshot history to compensate for reduced host-log survivability.",
+    "timeline_expansion": "Expand the time window using upstream telemetry and historical records before closing ingress reconstruction.",
+    "contradiction_resolution": "Resolve cross-source contradictions before stronger attribution or case closure.",
+    "privesc_change_records": "Check package backport records, change tickets, and admin workflow for local-privesc exposure review.",
+}
+
+SCOPE_STATUS_LABELS = {
+    "needs_external_corroboration": "external_corroboration_needed",
+    "host_only_scope_sufficient_for_requested_focus": "host_only_scope_currently_sufficient",
+}
+
+TIMELINE_STATUS_LABELS = {
+    "timeline_not_recovered": "timeline_not_recovered",
+    "timeline_not_normalized": "timeline_not_normalized",
+    "narrow_window": "timeline_window_narrow",
+    "normalized_window_present": "timeline_window_present",
+}
+
+
 def as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
@@ -28,22 +51,39 @@ def build_checklist(data: dict[str, Any]) -> str:
     incident = as_dict(data.get("incident"))
     host = as_dict(data.get("host"))
     scene = as_dict(data.get("scene_reconstruction"))
+    second_pass = as_dict(data.get("second_pass_review") or scene.get("second_pass_review"))
+    scope_review = as_dict(second_pass.get("scope_closure_review") or scene.get("scope_closure_review"))
+    timeline_review = as_dict(second_pass.get("timeline_review") or scene.get("timeline_review"))
+    log_layout_review = as_dict(second_pass.get("log_layout_review") or scene.get("log_layout_review"))
     auth_ips = as_list(scene.get("auth_source_ips"))
     has_container_cloud = int(scene.get("container_cloud_review_hit_count", 0) or 0) > 0
-    has_log_risk = any(
-        str(item.get("status", "")).strip().lower() in {"missing", "tampered", "suspicious"}
-        for item in [as_dict(x) for x in as_list(data.get("log_integrity"))]
-    )
+    if "adjusted_primary_log_risk_count" in log_layout_review:
+        has_log_risk = int(log_layout_review.get("adjusted_primary_log_risk_count", 0) or 0) > 0
+    else:
+        has_log_risk = any(
+            str(item.get("status", "")).strip().lower() in {"missing", "tampered", "suspicious"}
+            for item in [as_dict(x) for x in as_list(data.get("log_integrity"))]
+        )
+    external_pivots = [as_dict(x) for x in as_list(scope_review.get("external_pivots"))]
     lines = [
         f"# External Evidence Checklist - {incident.get('id', 'unknown')}",
         "",
         f"- Host: `{host.get('name', 'unknown')}` ({host.get('ip', 'unknown')})",
         f"- Case ID: `{data.get('case_id', 'unknown')}`",
         f"- Goal: close initial-access, lateral-movement, and upstream attribution gaps using non-host evidence.",
+        f"- Second-pass scope status: `{SCOPE_STATUS_LABELS.get(str(scope_review.get('status', '')), str(scope_review.get('status', 'unknown')) or 'unknown')}`",
+        f"- Second-pass timeline status: `{TIMELINE_STATUS_LABELS.get(str(timeline_review.get('status', '')), str(timeline_review.get('status', 'unknown')) or 'unknown')}`",
         "",
         "## Priority Pivots",
     ]
-    if auth_ips:
+    if external_pivots:
+        for item in external_pivots:
+            pivot_id = str(item.get("id", "")).strip()
+            reason = str(item.get("reason", "")).strip()
+            lines.append(f"- {PIVOT_LABELS.get(pivot_id, pivot_id or 'unlabeled pivot')}")
+            if reason:
+                lines.append(f"  Reason: {reason}")
+    elif auth_ips:
         lines.append(f"- Authentication source IPs observed on host: {', '.join(str(x) for x in auth_ips[:10])}")
         lines.append("- Pull bastion, VPN, IdP, or jump-host authentication logs for the same window.")
     else:

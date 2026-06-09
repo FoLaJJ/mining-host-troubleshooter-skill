@@ -50,7 +50,9 @@ If the user asks for one narrow goal such as "only check whether it was breached
 4. Collect read-only evidence.
 5. If primary logs are missing, pivot immediately to fallback evidence instead of guessing.
 6. Reconstruct attacker activity, persistence, runtime behavior, and traceability from evidence only.
-7. Export concise but detailed reports.
+7. Run a second-pass self-review before final reporting.
+   - Re-check timeline quality, scope closure, distro-aware log layout, overstatement risk, and required external pivots.
+8. Export concise but detailed reports.
 
 ## Distro and Platform Rules
 
@@ -133,7 +135,8 @@ The workflow should:
 3. Detect distro, privilege level, and trust state early.
 4. Collect detailed evidence, including vulnerability-exposure review surfaces.
 5. Enrich evidence into timeline, runtime profiles, hypothesis matrix, file/hash correlation, and privesc plausibility notes.
-6. Export full and leadership reports.
+6. Run a second-pass review to keep scope gaps, timeline gaps, distro-aware log interpretation, and anti-overstatement notes explicit.
+7. Export full and leadership reports.
 
 ## Reporting Standard
 
@@ -152,6 +155,7 @@ Every final report should include:
 11. Approval-gated follow-up actions, if the user requested remediation
 12. Clear separation between primary conclusions and weaker investigative leads
 13. Dual-use remote-tool presence kept separate from unauthorized-use conclusions unless the evidence chain supports escalation
+14. Second-pass review status, open gaps, and required external pivots when host-only evidence cannot close the case
 
 ## Dangerous Command Gate
 
@@ -183,6 +187,7 @@ Load only what is needed:
 9. [references/deception-and-contradiction-review.md](references/deception-and-contradiction-review.md) for fake-signal and cross-source contradiction handling
 10. [references/harness-discipline.md](references/harness-discipline.md) when evidence-linking discipline must stay strict, especially for weaker-model execution or noisy scenes
 11. [references/dual-use-remote-tool-review.md](references/dual-use-remote-tool-review.md) when remote-control software such as Sunlogin, ToDesk, AnyDesk, RustDesk, or TeamViewer appears and authorization is unclear
+12. [references/second-pass-review.md](references/second-pass-review.md) when the model needs the mandatory second-pass closure and anti-overstatement gate
 
 ## Maintainer Rules
 
