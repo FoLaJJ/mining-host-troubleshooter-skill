@@ -22,8 +22,9 @@ This skill is an investigation skill, not a remediation skill.
 7. If evidence is insufficient, say `inconclusive`.
 8. Distinguish every key conclusion as `observed_fact`, `inference`, or `attribution`, and include a confidence reason.
 9. Keep primary conclusions conservative. Route weaker clues into explicit `inconclusive` investigative leads instead of promoting them into the main case narrative.
-10. Keep traceable IPs visible in internal reports unless the user asks for redaction.
-11. Protect passwords, tokens, private keys, and wallet secrets. Redact them even in internal notes when full value disclosure is not necessary.
+10. Treat dual-use admin or remote-control tools such as Sunlogin, ToDesk, AnyDesk, RustDesk, and TeamViewer as neutral observed software presence by default. Do not convert tool presence or runtime alone into compromise.
+11. Keep traceable IPs visible in internal reports unless the user asks for redaction.
+12. Protect passwords, tokens, private keys, and wallet secrets. Redact them even in internal notes when full value disclosure is not necessary.
 
 ## Scope Control
 
@@ -150,6 +151,7 @@ Every final report should include:
 10. Unknowns, gaps, and explicit confidence limits
 11. Approval-gated follow-up actions, if the user requested remediation
 12. Clear separation between primary conclusions and weaker investigative leads
+13. Dual-use remote-tool presence kept separate from unauthorized-use conclusions unless the evidence chain supports escalation
 
 ## Dangerous Command Gate
 
@@ -180,6 +182,7 @@ Load only what is needed:
 8. [references/usage-scenarios.md](references/usage-scenarios.md) for operator examples
 9. [references/deception-and-contradiction-review.md](references/deception-and-contradiction-review.md) for fake-signal and cross-source contradiction handling
 10. [references/harness-discipline.md](references/harness-discipline.md) when evidence-linking discipline must stay strict, especially for weaker-model execution or noisy scenes
+11. [references/dual-use-remote-tool-review.md](references/dual-use-remote-tool-review.md) when remote-control software such as Sunlogin, ToDesk, AnyDesk, RustDesk, or TeamViewer appears and authorization is unclear
 
 ## Maintainer Rules
 

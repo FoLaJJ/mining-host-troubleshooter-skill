@@ -91,6 +91,33 @@ If a collection command may be polluted, aliased, wrapped, or replaced:
 
 Do not treat a single suspicious command path as proof that all host output is fake.
 
+## Dual-Use Remote-Control Tools
+
+Treat remote-control software such as Sunlogin, ToDesk, AnyDesk, RustDesk, and TeamViewer as dual-use tools.
+
+Default stance:
+
+1. tool presence is `observed_fact`
+2. tool runtime is `observed_fact`
+3. suspicious or unauthorized use is usually `inference`
+4. attacker control through the tool is not `confirmed` without stronger evidence
+
+Do not escalate based on the vendor name alone.
+
+Allowed upgrade path:
+
+1. start with presence, path, owner, service/unit name, startup method, and timestamps
+2. check whether host role and request context make the tool expected
+3. look for abnormal path, hash, parent process, account, startup changes, or timeline overlap with intrusion evidence
+4. if authorization cannot be determined, say so explicitly
+5. keep the conclusion `inconclusive` unless multiple sources support unauthorized use
+
+Do not let these shortcuts appear in output:
+
+1. `Sunlogin was found, therefore the host was remotely controlled by an attacker`
+2. `ToDesk is installed, therefore the machine was breached`
+3. `The tool is legitimate, therefore it is unrelated`
+
 ## Vulnerability Exposure and Local Privilege Escalation
 
 Use conservative wording for sudo, `CopyFail`, `DirtyFrag`, and related exposure review:
@@ -143,7 +170,8 @@ Before finalizing any report or answer, verify:
 7. missing logs are not described as tampering without corroboration
 8. contradiction signals are explicit where they affect confidence
 9. command-trust concerns are explicit where they affect confidence
-10. unknowns and collection limits are stated plainly
+10. dual-use remote-control tools are kept neutral unless abnormal use is evidenced
+11. unknowns and collection limits are stated plainly
 
 ## Anti-Patterns
 

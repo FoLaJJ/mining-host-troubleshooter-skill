@@ -60,6 +60,7 @@ You can add control constraints directly in plain language:
 - Uses multi-path read-only GPU probing instead of relying on `nvidia-smi` alone, combining `lspci`, `lshw`, `/dev/dri`, `/sys/class/drm`, `/proc/driver/nvidia`, `rocm-smi`, and related surfaces when present.
 - Captures command-missing/fallback markers and makes visibility limits explicit in reports.
 - Separates primary conclusions from investigative leads, forcing evidence-linked wording and keeping log loss, command pollution, and vulnerability exposure distinct from confirmed attacker actions.
+- Treats dual-use remote-control tools such as Sunlogin, ToDesk, AnyDesk, RustDesk, and TeamViewer as neutral observed software by default, escalating only when abnormal-use evidence exists.
 - Detects distro/kernel/package identity early so log locations and package evidence can be interpreted correctly.
 - Pivots to `wtmp`, `btmp`, `lastlog`, journald/rsyslog metadata, package history, shell traces, and `/proc/*/exe (deleted)` when primary logs are missing or tampered with.
 - Adds read-only local-privesc exposure review surfaces for recent sudo and kernel issues such as `CopyFail` and `DirtyFrag`, without running exploit validation.
@@ -126,6 +127,7 @@ Roles of the main outputs:
 |-- references/
 |   |-- diagnostic-playbook.md
 |   |-- command-trust-verification.md
+|   |-- dual-use-remote-tool-review.md
 |   |-- harness-discipline.md
 |   |-- log-loss-fallbacks.md
 |   |-- os-compatibility.md
@@ -160,6 +162,7 @@ Key files:
 - `scripts/command_guard.py`: dangerous-command gating.
 - `references/`: playbooks, compatibility notes, fallback rules, maintenance guide.
 - `references/harness-discipline.md`: evidence-linking guardrails for weaker-model execution and noisy scenes.
+- `references/dual-use-remote-tool-review.md`: keeps remote-control software review factual when authorization is unclear.
 
 ## Installation
 

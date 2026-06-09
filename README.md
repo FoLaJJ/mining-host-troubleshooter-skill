@@ -62,6 +62,7 @@
 - 自动记录离线/受限环境线索，明确说明本技能不依赖 GitHub 下载额外工具，也不会主动尝试外部下载。
 - 自动做跨来源矛盾与欺骗风险复核，关注认证痕迹、主日志、journald、`wtmp/btmp`、命令解析路径之间是否互相打架。
 - 自动把“主结论”和“待证实线索”分层，要求关键结论绑定 `evidence_ids`，并把缺日志、命令污染、漏洞暴露分别与“已被利用/已被清理”拆开描述。
+- 对向日葵、ToDesk、AnyDesk、RustDesk、TeamViewer 这类双用途远控工具默认做中性记录：先记录存在、运行和启动方式，再判断是否有未授权使用证据。
 - 优先识别 Linux 发行版、内核版本、sudo/关键包版本，先知道证据应该放在哪里、应该怎么看。
 - 日志缺失时自动转向 `wtmp`、`btmp`、`lastlog`、journald/rsyslog 配置、service/timer 元数据、包管理历史、shell 痕迹、`/proc/*/exe (deleted)` 等替代证据。
 - 对近期本地提权暴露面做只读检测与合理怀疑链整理，关注 sudo 相关问题与 `CopyFail`、`DirtyFrag` 等内核暴露面，但不做利用验证。
@@ -128,6 +129,7 @@
 |-- references/
 |   |-- diagnostic-playbook.md
 |   |-- command-trust-verification.md
+|   |-- dual-use-remote-tool-review.md
 |   |-- harness-discipline.md
 |   |-- log-loss-fallbacks.md
 |   |-- os-compatibility.md
@@ -163,6 +165,7 @@
 - `scripts/command_guard.py`：危险命令门禁与审批约束。
 - `references/`：排查手册、降级策略、兼容性与维护规范。
 - `references/harness-discipline.md`：给弱模型或复杂现场使用的证据关联护栏，强制区分主结论与待证实线索。
+- `references/dual-use-remote-tool-review.md`：处理向日葵、ToDesk 等双用途远控工具，避免把合法运维和攻击者借用混为一谈。
 - `references/deception-and-contradiction-review.md`：专门处理假信息、误导性日志和跨来源矛盾。
 
 ## 安装

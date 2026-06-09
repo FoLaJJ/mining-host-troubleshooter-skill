@@ -63,6 +63,16 @@ Investigative leads should carry:
 3. why it remains `inconclusive`
 4. supporting and counter-evidence when available
 
+## Dual-Use Remote Tools
+
+When software such as Sunlogin, ToDesk, AnyDesk, RustDesk, or TeamViewer appears:
+
+1. record presence and runtime as observed software facts first
+2. do not assume either legitimacy or compromise from the tool name alone
+3. keep `authorized use unknown` separate from `unauthorized use suspected`
+4. if the tool may have been used by the attacker, explain which extra evidence supports that concern
+5. if the tool may simply be part of normal operations, say that this remains possible
+
 ## Language Rules
 
 Use phrases like:
@@ -80,6 +90,7 @@ Avoid phrases like:
 3. `The attacker must have`
 4. `This proves exploitation` when only exposure is known
 5. `Logs were clearly deleted by the attacker` when only visibility loss is known
+6. `The attacker used ToDesk/Sunlogin/AnyDesk` when only software presence or runtime was observed
 
 ## Internal vs External Copies
 

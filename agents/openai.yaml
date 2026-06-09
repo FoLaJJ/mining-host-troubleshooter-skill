@@ -9,6 +9,8 @@ interface:
     command output. Keep primary conclusions conservative: separate
     observed_fact, inference, and attribution; require concrete evidence IDs for
     every key conclusion; treat weak clues as inconclusive investigative leads;
+    treat dual-use remote-control tools as observed presence unless abnormal
+    authorization, path, startup, or timeline evidence supports suspicious use;
     treat missing logs as visibility loss unless corroborated; treat vulnerable
     versions as exposure rather than confirmed exploitation; reconstruct
     attacker behavior from evidence only; and never execute state-changing
