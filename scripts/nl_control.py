@@ -197,7 +197,10 @@ def main() -> int:
     print(json.dumps(sanitize_parsed_for_log(parsed), ensure_ascii=False, indent=2))
     if parsed.get("mutation_keywords_detected"):
         print("[NOTE]")
-        print("State-changing words were detected in the request, but this controller will still run read-only evidence collection only.")
+        if parsed.get("report_regeneration_only"):
+            print("State-changing words were detected in the request, but this controller will still avoid state-changing host actions during report regeneration only.")
+        else:
+            print("State-changing words were detected in the request, but this controller will still run read-only evidence collection only.")
     print("[RUN]")
     print(" ".join(cmd))
     proc = subprocess.run(cmd, env=env, check=False)
