@@ -113,6 +113,62 @@ class RunReadonlyWorkflowTests(unittest.TestCase):
                 ],
             )
 
+    def test_workflow_does_not_switch_to_regeneration_mode_when_bundle_like_dirs_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            existing_case = Path(tmp) / "existing-case"
+            for name in ("artifacts", "evidence", "meta"):
+                (existing_case / name).mkdir(parents=True, exist_ok=True)
+
+            created_case = Path(tmp) / "new-case"
+            evidence_dir = created_case / "evidence"
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            raw_path = evidence_dir / "evidence.raw.json"
+            raw_path.write_text("{}", encoding="utf-8")
+            step_order = []
+
+            def fake_run_step(name: str, cmd: list[str]) -> tuple[int, str]:
+                step_order.append(name)
+                if name == "collect_live_evidence":
+                    return 0, (
+                        f"Evidence JSON written: {raw_path}\n"
+                        f"Case dir: {created_case}\n"
+                    )
+                if name == "validate_case_bundle":
+                    return 0, json.dumps({"ok": True})
+                return 0, ""
+
+            argv = [
+                "run_readonly_workflow.py",
+                "--remote-user",
+                "ubuntu",
+                "--remote-ip",
+                "203.0.113.10",
+                "--case-root",
+                str(tmp),
+                "--skip-export",
+            ]
+
+            with (
+                patch.object(sys, "argv", argv),
+                patch.object(run_readonly_workflow, "run_step", side_effect=fake_run_step),
+                patch.object(run_readonly_workflow, "export_sidecar_summaries"),
+                patch.object(run_readonly_workflow, "export_scene_reconstruction"),
+                patch.object(run_readonly_workflow, "verify_expected_report_outputs"),
+            ):
+                rc = run_readonly_workflow.main()
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(step_order[0], "collect_live_evidence")
+            self.assertEqual(
+                step_order[:4],
+                [
+                    "collect_live_evidence",
+                    "enrich_case_evidence",
+                    "review_case_evidence",
+                    "validate_case_bundle",
+                ],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
