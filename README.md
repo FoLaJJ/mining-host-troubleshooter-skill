@@ -48,6 +48,8 @@
 1. **Trust Bootstrap**：确认目标身份、校验 SSH 信任链（`known_hosts`/指纹）。
 2. **Distro First**：先识别发行版、内核、包管理器、当前权限，明确 Ubuntu / Debian / CentOS / RHEL / Rocky / Alma 等差异。
 3. **Readonly Sweep**：执行低影响只读采集，带超时、检查点、降级兜底。
+   - 远程认证链路默认保守降级：遇到口令失败或 host key 不匹配立即停止，不做盲重试。
+   - 只有在非认证类问题（如 shell/channel 兼容性）时，才允许极少量单次降级尝试。
 4. **Deep Evidence Correlation**：关联进程、网络、持久化、容器、云线索、GPU 进程映射、本地提权暴露面、微小配置差异。
 5. **Second-Pass Self-Review**：在出报告前强制复核时间线质量、范围闭环、发行版日志布局、误报风险和外部补证支点。
 6. **Confidence-Gated Conclusion**：按证据完整度输出 `confirmed` 或 `inconclusive`，禁止杜撰。
@@ -65,6 +67,7 @@
 - GPU 侧采用多路径只读探测，不依赖单一 `nvidia-smi`，会结合 `lspci`、`lshw`、`/dev/dri`、`/sys/class/drm`、`/proc/driver/nvidia`、`rocm-smi` 等线索。
 - 自动识别命令不可用/降级标记，并在报告中显式给出可见性边界。
 - 自动记录离线/受限环境线索，明确说明本技能不依赖 GitHub 下载额外工具，也不会主动尝试外部下载。
+- 远程连接失败时仍会在当前案件目录内落 `failure bundle`、简报、外部补证清单和主报告，不允许因为一条登录链路失败就什么都不产出。
 - 自动做跨来源矛盾与欺骗风险复核，关注认证痕迹、主日志、journald、`wtmp/btmp`、命令解析路径之间是否互相打架。
 - 自动把“主结论”和“待证实线索”分层，要求关键结论绑定 `evidence_ids`，并把缺日志、命令污染、漏洞暴露分别与“已被利用/已被清理”拆开描述。
 - 对向日葵、ToDesk、AnyDesk、RustDesk、TeamViewer 这类双用途远控工具默认做中性记录：先记录存在、运行和启动方式，再判断是否有未授权使用证据。
@@ -194,10 +197,13 @@ node scripts/install-skill.mjs install --target codex --force
 node scripts/install-skill.mjs install --target cc-switch --force
 ```
 
+如果本机 `Codex` 已经装过旧版本，推荐直接执行上面的 `--target codex --force`。
+它会覆盖 `~/.codex/skills/mining-host-troubleshooter-skill`，并清理旧的历史目录别名，避免“仓库已更新但本机仍在跑旧 skill”。
+
 自定义安装目录：
 
 ```bash
-node scripts/install-skill.mjs install --dest /path/to/skills --name mining-host-troubleshooter --force
+node scripts/install-skill.mjs install --dest /path/to/skills --name mining-host-troubleshooter-skill --force
 ```
 
 查看默认目标路径：
@@ -211,6 +217,8 @@ node scripts/install-skill.mjs print-targets
 ```bash
 npx mining-host-troubleshooter-skill install --target agents
 ```
+
+更新本机已安装 skill 后，重启 `Codex` 再加载新版本。
 
 ## 安全边界
 

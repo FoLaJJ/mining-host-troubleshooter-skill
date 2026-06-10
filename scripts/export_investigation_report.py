@@ -63,6 +63,14 @@ def adjusted_log_risk_count(data: dict[str, Any], log_integrity: list[dict[str, 
     )
 
 
+def collection_failure_info(ctx: dict[str, Any]) -> dict[str, Any]:
+    return as_dict(ctx.get("collection_failure"))
+
+
+def collection_failed(ctx: dict[str, Any]) -> bool:
+    return str(collection_failure_info(ctx).get("status", "")).strip().lower() == "failed"
+
+
 def mask_ip(ip: str) -> str:
     m = re.fullmatch(r"(\d{1,3}\.){3}\d{1,3}", ip.strip())
     if not m:
@@ -340,6 +348,7 @@ def workflow_review_status_label(value: str) -> str:
     return {
         "completed_ready_for_host_only_report": "host_only_report_ready",
         "completed_with_open_gaps": "open_gaps_visible",
+        "collection_failed": "collection_failed",
     }.get(str(value).strip(), str(value).strip() or "unknown")
 
 
@@ -347,6 +356,7 @@ def workflow_review_status_label_zh_cn(value: str) -> str:
     return {
         "completed_ready_for_host_only_report": "主机侧报告闭环条件已满足",
         "completed_with_open_gaps": "仍有未闭环缺口",
+        "collection_failed": "主机侧采集失败",
     }.get(str(value).strip(), str(value).strip() or "未知")
 
 
@@ -377,6 +387,11 @@ def localize_auto_text_zh_cn(text: str) -> str:
         "No direct host-side lateral-movement indicator was observed in current visibility.": "当前可见性范围内，未直接观察到主机侧横向移动指标。",
         "Transfer or remote-shell tool strings were observed and require deeper pivot review.": "已观察到传输工具或远程壳相关字符串，需要继续做横向支点复核。",
         "No listening-port list was recovered in this pass.": "本轮未恢复出监听端口列表。",
+        "Collection failed before host-side evidence could be gathered.": "主机侧证据尚未建立前，采集流程已经失败。",
+        "No investigative conclusion should be drawn from this bundle until host-side collection succeeds.": "在主机侧采集成功前，不能基于这个失败案件包输出任何排查结论。",
+        "Fix trust/auth/channel issues, preserve the failure bundle, and use external telemetry only as temporary corroboration before rerunning read-only collection.": "先修复信任、认证或通道问题，保留失败案件包，并且仅把外部遥测作为临时补证；完成后再重新执行只读采集。",
+        "Host-side service exposure was not collected because collection failed before probes completed.": "由于探针采集在完成前失败，本轮未取得主机侧服务暴露面信息。",
+        "No host-side lateral-movement assessment was possible because collection failed before evidence gathering.": "由于主机侧证据采集未成功，本轮无法对横向移动做主机侧判断。",
         "No direct miner IOC was observed in this collection. Current results are limited to review surfaces that still require analyst confirmation.": "本次采集中未观察到直接的挖矿 IOC，当前结果主要是需要人工复核的访问面与环境侧线索。",
         "This does not clear the host. The present output supports review-driven triage, not a confirmed mining-compromise conclusion.": "这并不能证明主机安全无虞。当前输出仅支持复核驱动的分诊，不足以下结论为已确认的挖矿入侵。",
         "Absence of indicators in this pass is not proof of absence; visibility, timing, and privilege may still be incomplete.": "本轮未见指标并不等于不存在问题；当前可见性、采集时机和权限范围仍可能不完整。",
@@ -691,9 +706,17 @@ def build_management_view(data: dict[str, Any], redact: bool, case_dir: str | No
             ],
         ),
         "",
-        anchor_tag("mgmt-risks"),
-        "## Risk Overview",
     ])
+    if ctx["collection_failed"]:
+        lines.extend(
+            [
+                "## Collection Failure",
+                f"- **Failure Phase:** `{maybe_redact(str(ctx['collection_failure'].get('phase', 'unknown')) or 'unknown')}`",
+                f"- **Reason:** {maybe_redact(str(ctx['collection_failure'].get('reason', '-')) or '-')}",
+                "",
+            ]
+        )
+    lines.extend([anchor_tag("mgmt-risks"), "## Risk Overview"])
     lines.extend(key_risk_lines(data, case_dir=case_dir))
     lines.extend([
         "",
@@ -773,17 +796,20 @@ def build_management_view_zh_cn(data: dict[str, Any], redact: bool, case_dir: st
             'Direct miner-like runtime indicators were observed during collection.': '本次采集中观察到了直接的挖矿类运行时指标。',
             'No direct miner IOC was observed in this collection. Current results are limited to review surfaces that still require analyst confirmation.': '本次采集中未观察到直接的挖矿 IOC，当前结果主要是需要人工复核的访问面与环境侧线索。',
             'This collection did not produce direct miner evidence or enough review surface to support a compromise conclusion.': '本次采集未形成直接挖矿证据，也未形成足以支撑入侵结论的复核面。',
+            'Collection failed before host-side evidence could be gathered.': '主机侧证据尚未建立前，采集流程已经失败。',
         }.get(posture_info['verdict'], posture_info['verdict']))}",
         f"- **置信度态势：** {confidence_icon(posture_info['posture'])} `{ {'high':'高','medium':'中','low':'低','unknown':'未知'}.get(posture_info['posture'], posture_info['posture']) }`",
         f"- **判断边界：** {maybe_redact_zh({
             'Triage should proceed as a compromise-oriented case, but attribution still requires additional evidence.': '建议按入侵方向继续排查，但归因仍需补充更多证据。',
             'This does not clear the host. The present output supports review-driven triage, not a confirmed mining-compromise conclusion.': '这并不代表主机可以直接排除风险，当前结果只支撑复核型分诊，不足以确认已发生挖矿入侵。',
             'Absence of indicators in this pass is not proof of absence; visibility, timing, and privilege may still be incomplete.': '本轮未命中指标不等于主机无风险，观察窗口、权限范围和证据残留都可能仍不完整。',
+            'No investigative conclusion should be drawn from this bundle until host-side collection succeeds.': '在主机侧采集成功前，不能基于这个失败案件包输出任何排查结论。',
         }.get(posture_info['boundary'], posture_info['boundary']))}",
         f"- **优先方向：** {maybe_redact_zh({
             'Prioritize runtime lineage, parent-child process review, wallet/pool traces, and persistence pivots.': '优先复核运行链路、父子进程关系、钱包/矿池痕迹和持久化落点。',
             'Prioritize surviving access traces, service startup context, container/cloud exposure, and deleted-log fallback artifacts.': '优先复核仍存活的访问痕迹、服务启动上下文、容器/云暴露面，以及日志删除后的替代证据。',
             'Expand time window, privilege visibility, and external telemetry correlation before closing the case.': '在结束案件前应继续扩展观察窗口、权限可见性，并结合外部遥测交叉验证。',
+            'Fix trust/auth/channel issues, preserve the failure bundle, and use external telemetry only as temporary corroboration before rerunning read-only collection.': '先修复信任、认证或通道问题，保留失败案件包，并且仅把外部遥测作为临时补证；完成后再重新执行只读采集。',
         }.get(posture_info['focus'], posture_info['focus']))}",
         "- **操作边界：** 本摘要对应的案件包仅包含只读采集结果，不包含任何状态变更。",
         "",
@@ -807,9 +833,17 @@ def build_management_view_zh_cn(data: dict[str, Any], redact: bool, case_dir: st
             ],
         ),
         "",
-        anchor_tag("mgmt-risks"),
-        "## 风险概览",
     ])
+    if ctx["collection_failed"]:
+        lines.extend(
+            [
+                "## 采集失败",
+                f"- **失败阶段：** `{maybe_redact(str(ctx['collection_failure'].get('phase', 'unknown')) or 'unknown')}`",
+                f"- **失败原因：** {maybe_redact_zh(str(ctx['collection_failure'].get('reason', '-')) or '-')}",
+                "",
+            ]
+        )
+    lines.extend([anchor_tag("mgmt-risks"), "## 风险概览"])
     lines.extend(key_risk_lines_zh_cn(data, case_dir=case_dir))
     lines.extend([
         "",
@@ -898,10 +932,17 @@ def build_soc_view(data: dict[str, Any], redact: bool, case_dir: str | None = No
             ],
         ),
         "",
-        anchor_tag("soc-samples"),
-        "## High-Signal Samples",
-        "",
     ])
+    if ctx["collection_failed"]:
+        lines.extend(
+            [
+                "## Collection Failure",
+                f"- **Failure Phase:** `{maybe_redact(str(ctx['collection_failure'].get('phase', 'unknown')) or 'unknown')}`",
+                f"- **Reason:** {maybe_redact(str(ctx['collection_failure'].get('reason', '-')) or '-')}",
+                "",
+            ]
+        )
+    lines.extend([anchor_tag("soc-samples"), "## High-Signal Samples", ""])
     append_sample_group(lines, "Auth Source IPs", as_list(scene_reconstruction.get("auth_source_ips")), maybe_redact, limit=4, max_len=80)
     append_sample_group(lines, "Listening Ports", as_list(scene_reconstruction.get("listening_ports")), maybe_redact, limit=6, max_len=80)
     append_sample_group(lines, "Process IOC Samples", as_list(scene_reconstruction.get("process_ioc_samples")), maybe_redact, limit=4, max_len=140)
@@ -966,17 +1007,20 @@ def build_soc_view_zh_cn(data: dict[str, Any], redact: bool, case_dir: str | Non
             'Direct miner-like runtime indicators were observed during collection.': '本次采集中观察到了直接的挖矿类运行时指标。',
             'No direct miner IOC was observed in this collection. Current results are limited to review surfaces that still require analyst confirmation.': '本次采集中未观察到直接的挖矿 IOC，当前结果主要是需要人工复核的访问面与环境侧线索。',
             'This collection did not produce direct miner evidence or enough review surface to support a compromise conclusion.': '本次采集未形成直接挖矿证据，也未形成足以支撑入侵结论的复核面。',
+            'Collection failed before host-side evidence could be gathered.': '主机侧证据尚未建立前，采集流程已经失败。',
         }.get(posture_info['verdict'], posture_info['verdict']))}",
         f"- **置信度态势：** {confidence_icon(posture_info['posture'])} `{ {'high':'高','medium':'中','low':'低','unknown':'未知'}.get(posture_info['posture'], posture_info['posture']) }`",
         f"- **下一步重点：** {maybe_redact_zh({
             'Prioritize runtime lineage, parent-child process review, wallet/pool traces, and persistence pivots.': '优先复核运行链路、父子进程关系、钱包/矿池痕迹和持久化落点。',
             'Prioritize surviving access traces, service startup context, container/cloud exposure, and deleted-log fallback artifacts.': '优先复核仍存活的访问痕迹、服务启动上下文、容器/云暴露面，以及日志删除后的替代证据。',
             'Expand time window, privilege visibility, and external telemetry correlation before closing the case.': '继续扩展观察窗口、权限可见性，并结合外部遥测交叉验证。',
+            'Fix trust/auth/channel issues, preserve the failure bundle, and use external telemetry only as temporary corroboration before rerunning read-only collection.': '先修复信任、认证或通道问题，保留失败案件包，并且仅把外部遥测作为临时补证；完成后再重新执行只读采集。',
         }.get(posture_info['focus'], posture_info['focus']))}",
         f"- **判断边界：** {maybe_redact_zh({
             'Triage should proceed as a compromise-oriented case, but attribution still requires additional evidence.': '建议按入侵方向继续排查，但归因仍需补充更多证据。',
             'This does not clear the host. The present output supports review-driven triage, not a confirmed mining-compromise conclusion.': '当前结果不构成主机已安全的证明，只支撑复核型分诊，不足以确认已发生挖矿入侵。',
             'Absence of indicators in this pass is not proof of absence; visibility, timing, and privilege may still be incomplete.': '本轮未命中指标不等于主机无风险，观察窗口、权限范围和证据残留都可能仍不完整。',
+            'No investigative conclusion should be drawn from this bundle until host-side collection succeeds.': '在主机侧采集成功前，不能基于这个失败案件包输出任何排查结论。',
         }.get(posture_info['boundary'], posture_info['boundary']))}",
         "",
         anchor_tag("soc-snapshot"),
@@ -999,10 +1043,17 @@ def build_soc_view_zh_cn(data: dict[str, Any], redact: bool, case_dir: str | Non
             ],
         ),
         "",
-        anchor_tag("soc-samples"),
-        "## 高信号样本",
-        "",
     ])
+    if ctx["collection_failed"]:
+        lines.extend(
+            [
+                "## 采集失败",
+                f"- **失败阶段：** `{maybe_redact(str(ctx['collection_failure'].get('phase', 'unknown')) or 'unknown')}`",
+                f"- **失败原因：** {maybe_redact_zh(str(ctx['collection_failure'].get('reason', '-')) or '-')}",
+                "",
+            ]
+        )
+    lines.extend([anchor_tag("soc-samples"), "## 高信号样本", ""])
     append_sample_group(lines, "认证来源 IP", as_list(scene_reconstruction.get("auth_source_ips")), maybe_redact, limit=4, max_len=80, empty_label="无。")
     append_sample_group(lines, "监听端口", as_list(scene_reconstruction.get("listening_ports")), maybe_redact, limit=6, max_len=80, empty_label="无。")
     append_sample_group(lines, "进程 IOC 样本", as_list(scene_reconstruction.get("process_ioc_samples")), maybe_redact, limit=4, max_len=140, empty_label="无。")
@@ -1379,6 +1430,73 @@ def confidence_emoji(value: str) -> str:
 
 
 def leadership_payload(ctx: dict[str, Any]) -> dict[str, Any]:
+    failure = collection_failure_info(ctx)
+    if collection_failed(ctx):
+        failure_phase = str(failure.get("phase", "unknown"))
+        failure_reason = str(
+            failure.get("reason", "Host-side collection failed before evidence could be gathered.")
+        )
+        retry_guidance = str(
+            failure.get(
+                "retry_guidance",
+                "Review SSH trust, authentication, and shell/channel compatibility before retrying.",
+            )
+        )
+        return {
+            "intrusion_window": "unknown",
+            "ingress_hypotheses": [
+                {
+                    "label": "No host-side evidence was gathered, so initial-access reconstruction remains unavailable.",
+                    "label_zh": "由于未建立主机侧证据，当前无法还原入侵入口。",
+                    "confidence": "unknown",
+                    "basis": failure_reason,
+                }
+            ],
+            "activity_summary": [
+                "Collection failed before host-side evidence could be gathered.",
+                f"Failure phase: {failure_phase}",
+                failure_reason,
+                retry_guidance,
+            ],
+            "runtime_profiles": [],
+            "malware_files": [],
+            "top_cpu": [],
+            "auth_ips": [],
+            "listening_ports": [],
+            "service_exposure": "Host-side service exposure was not collected because collection failed before probes completed.",
+            "lateral_status": "unknown",
+            "lateral_basis": "No host-side lateral-movement assessment was possible because collection failed before evidence gathering.",
+            "log_risk_count": safe_int(ctx["log_risk_count"]),
+            "log_layout_status": "unknown",
+            "log_layout_os_family": "unknown",
+            "log_layout_adjusted_count": 0,
+            "log_layout_raw_count": 0,
+            "log_layout_summary": "",
+            "timeline_review_status": "unknown",
+            "timeline_review_summary": "No timeline review was possible because host-side collection failed before evidence gathering.",
+            "timeline_normalized_event_count": 0,
+            "timeline_span_minutes": 0,
+            "scope_closure_status": "unknown",
+            "scope_closure_summary": "No host-side scope closure review was possible because collection failed before evidence gathering.",
+            "scope_external_pivots": [],
+            "workflow_review_status": "collection_failed",
+            "workflow_review_summary": "Collection failed before host-side evidence could be gathered.",
+            "workflow_closure_ready": False,
+            "workflow_closure_notes": [failure_reason, retry_guidance],
+            "evidence_excerpt_ids": [],
+            "gpu_peak": 0,
+            "gpu_suspicious": 0,
+            "gpu_visibility_status": "unknown",
+            "gpu_visibility_summary": "GPU visibility was not assessed because collection failed before host-side probes completed.",
+            "gpu_vendor_hints": [],
+            "gpu_fallback_markers": [],
+            "runtime_profile_count": 0,
+            "top_cpu_keyword_hits": 0,
+            "collection_failure_phase": failure_phase,
+            "collection_failure_reason": failure_reason,
+            "collection_retry_guidance": retry_guidance,
+        }
+
     scene = ctx["scene_reconstruction"]
     second_pass = as_dict(ctx.get("second_pass_review"))
     accepted_auth_review = as_dict(second_pass.get("accepted_auth_review") or scene.get("accepted_auth_review"))
@@ -1558,11 +1676,45 @@ def leadership_payload(ctx: dict[str, Any]) -> dict[str, Any]:
         "gpu_fallback_markers": [str(x) for x in as_list(scene.get("gpu_fallback_markers"))[:8]],
         "runtime_profile_count": safe_int(scene.get("runtime_profile_count", 0)),
         "top_cpu_keyword_hits": safe_int(scene.get("top_cpu_process_keyword_hit_count", 0)),
+        "collection_failure_phase": "",
+        "collection_failure_reason": "",
+        "collection_retry_guidance": "",
     }
 
 
 def leadership_matrix_rows(ctx: dict[str, Any], payload: dict[str, Any]) -> list[dict[str, str]]:
     posture = investigation_posture_payload(ctx)
+    if collection_failed(ctx):
+        phase = str(payload.get("collection_failure_phase", "unknown") or "unknown")
+        reason = str(payload.get("collection_failure_reason", "Host-side collection failed before evidence could be gathered."))
+        retry_guidance = str(payload.get("collection_retry_guidance", "-"))
+        return [
+            {
+                "claim_type": "observed_fact",
+                "confidence": "unknown",
+                "statement": "Collection failed before host-side evidence could be gathered.",
+                "statement_zh": "主机侧证据尚未建立前，采集流程已经失败。",
+                "basis": reason,
+                "basis_zh": reason,
+            },
+            {
+                "claim_type": "inference",
+                "confidence": "unknown",
+                "statement": "No host-side compromise conclusion can be drawn from this bundle.",
+                "statement_zh": "当前不能基于该失败案件包输出主机侧入侵结论。",
+                "basis": f"phase={phase}; {retry_guidance}",
+                "basis_zh": f"phase={phase}; {retry_guidance}",
+            },
+            {
+                "claim_type": "attribution",
+                "confidence": "unknown",
+                "statement": "No access-path or actor attribution can be made until host-side collection succeeds.",
+                "statement_zh": "在主机侧采集成功前，无法进行入口路径或攻击者归因。",
+                "basis": "host-side evidence unavailable",
+                "basis_zh": "host-side evidence unavailable",
+            },
+        ]
+
     trace_counts = ctx["trace_counts"]
     gpu_status_zh = {
         "suspicious_runtime": "已见可疑运行时",
@@ -1697,8 +1849,18 @@ def build_leadership_report(data: dict[str, Any], redact: bool, case_dir: str | 
         f"- **Boundary:** {maybe_redact(posture['boundary'])}",
         f"- **Immediate Focus:** {maybe_redact(posture['focus'])}",
         "",
-        "## 🧩 Conclusion Matrix",
     ]
+    if ctx["collection_failed"]:
+        lines.extend(
+            [
+                "## ⚠️ Collection Failure",
+                f"- **Phase:** `{maybe_redact(payload['collection_failure_phase'] or 'unknown')}`",
+                f"- **Reason:** {maybe_redact(payload['collection_failure_reason'] or '-')}",
+                f"- **Retry Guidance:** {maybe_redact(payload['collection_retry_guidance'] or '-')}",
+                "",
+            ]
+        )
+    lines.append("## 🧩 Conclusion Matrix")
     for row in matrix_rows:
         lines.extend(
             [
@@ -1875,8 +2037,18 @@ def build_leadership_report_zh_cn(data: dict[str, Any], redact: bool, case_dir: 
         f"- **判断边界：** {maybe_redact(localize_auto_text_zh_cn(posture['boundary']))}",
         f"- **当前重点：** {maybe_redact(localize_auto_text_zh_cn(posture['focus']))}",
         "",
-        "## 🧩 结论矩阵",
     ]
+    if ctx["collection_failed"]:
+        lines.extend(
+            [
+                "## ⚠️ 采集失败说明",
+                f"- **失败阶段：** `{sanitize_report_text(payload['collection_failure_phase'] or 'unknown', redact)}`",
+                f"- **失败原因：** {maybe_redact(payload['collection_failure_reason'] or '-')}",
+                f"- **重试建议：** {maybe_redact(payload['collection_retry_guidance'] or '-')}",
+                "",
+            ]
+        )
+    lines.append("## 🧩 结论矩阵")
     for row in matrix_rows:
         claim_zh = {
             "observed_fact": "观测事实",
@@ -2242,6 +2414,34 @@ def overall_confidence_posture(ctx: dict[str, Any]) -> str:
 
 
 def investigation_posture_payload(ctx: dict[str, Any]) -> dict[str, Any]:
+    failure = collection_failure_info(ctx)
+    if collection_failed(ctx):
+        return {
+            "posture": "unknown",
+            "verdict": "Collection failed before host-side evidence could be gathered.",
+            "boundary": "No investigative conclusion should be drawn from this bundle until host-side collection succeeds.",
+            "focus": "Fix trust/auth/channel issues, preserve the failure bundle, and use external telemetry only as temporary corroboration before rerunning read-only collection.",
+            "process_hits": 0,
+            "network_hits": 0,
+            "gpu_hits": 0,
+            "runtime_profile_hits": 0,
+            "access_hits": 0,
+            "container_hits": 0,
+            "kernel_hits": 0,
+            "unknown_trace_count": 0,
+            "collection_failure_phase": str(failure.get("phase", "unknown")),
+            "collection_failure_reason": str(
+                failure.get("reason", "Host-side collection failed before evidence could be gathered.")
+            ),
+            "collection_retry_guidance": str(
+                failure.get(
+                    "retry_guidance",
+                    "Review SSH trust, authentication, and shell/channel compatibility before retrying.",
+                )
+            ),
+            "collection_safe_to_retry": bool(failure.get("safe_to_retry_without_new_credentials", False)),
+        }
+
     scene = ctx["scene_reconstruction"]
     second_pass = as_dict(ctx.get("second_pass_review"))
     persistence_review = as_dict(second_pass.get("persistence_surface_review") or scene.get("persistence_surface_review"))
@@ -2433,6 +2633,39 @@ def top_conclusion_lines(
     contradiction_review = as_dict(ctx["contradiction_review"])
     deception_risk_level = str(contradiction_review.get("deception_risk_level", "unknown")).strip() or "unknown"
     deception_signal_count = int(contradiction_review.get("count", 0) or 0)
+    if collection_failed(ctx):
+        failure = collection_failure_info(ctx)
+        failure_phase = str(failure.get("phase", "unknown")).strip() or "unknown"
+        failure_reason = str(
+            failure.get("reason", "Host-side collection failed before evidence could be gathered.")
+        ).strip()
+        retry_guidance = str(
+            failure.get(
+                "retry_guidance",
+                "Review SSH trust, authentication, and shell/channel compatibility before retrying.",
+            )
+        ).strip()
+        return [
+            anchor_tag("report-conclusion"),
+            "## Investigation Conclusion",
+            "",
+            f"- **Verdict:** {maybe_redact(posture_info['verdict'])}",
+            f"- **Confidence Posture:** {confidence_icon(posture)} `{posture}`",
+            f"- **Decision Boundary:** {maybe_redact(posture_info['boundary'])}",
+            f"- **Read-Only Scope:** `0` state-changing actions executed during this collection.",
+            "",
+            "### Collection Failure",
+            f"- **Failure Phase:** `{maybe_redact(failure_phase)}`",
+            f"- **Reason:** {maybe_redact(failure_reason or '-')}",
+            f"- **Retry Guidance:** {maybe_redact(retry_guidance or '-')}",
+            "- **Host-Side Evidence Availability:** `none`",
+            "",
+            "### Remaining Gaps",
+            "- **Primary Gap:** No host-side evidence was gathered, so compromise, persistence, and attribution remain unknown.",
+            f"- **Deception Risk:** `{deception_risk_level}` with `{deception_signal_count}` contradiction signal(s).",
+            "- **Next Reading Path:** [Findings](#report-findings) | [Timeline](#report-timeline) | [Evidence Details](#report-evidence-details)",
+            "",
+        ]
     lines = [
         anchor_tag("report-conclusion"),
         "## Investigation Conclusion",
@@ -2538,6 +2771,39 @@ def top_conclusion_lines_zh_cn(
         "low": "低",
         "unknown": "未知",
     }.get(posture, posture)
+    if collection_failed(ctx):
+        failure = collection_failure_info(ctx)
+        failure_phase = str(failure.get("phase", "unknown")).strip() or "unknown"
+        failure_reason = str(
+            failure.get("reason", "Host-side collection failed before evidence could be gathered.")
+        ).strip()
+        retry_guidance = str(
+            failure.get(
+                "retry_guidance",
+                "Review SSH trust, authentication, and shell/channel compatibility before retrying.",
+            )
+        ).strip()
+        return [
+            anchor_tag("report-conclusion"),
+            "## 核心结论",
+            "",
+            f"- **结论：** {maybe_redact(localize_auto_text_zh_cn(posture_info['verdict']))}",
+            f"- **置信度态势：** {confidence_icon(posture)} `{posture_label}`",
+            f"- **判断边界：** {maybe_redact(localize_auto_text_zh_cn(posture_info['boundary']))}",
+            "- **只读约束：** 本次采集未执行任何状态变更命令。",
+            "",
+            "### 采集失败",
+            f"- **失败阶段：** `{maybe_redact(failure_phase)}`",
+            f"- **失败原因：** {maybe_redact(failure_reason or '-')}",
+            f"- **重试建议：** {maybe_redact(retry_guidance or '-')}",
+            "- **主机侧证据状态：** `未建立`",
+            "",
+            "### 未解决缺口",
+            "- **主要缺口：** 当前没有采集到主机侧证据，因此是否被入侵、是否存在持久化、是否能够归因都仍然未知。",
+            f"- **欺骗风险：** `{maybe_redact({'high': '高', 'medium': '中', 'low': '低', 'unknown': '未知'}.get(deception_risk_level, deception_risk_level))}`，共 `{deception_signal_count}` 条矛盾信号。",
+            "- **继续阅读：** [结论与研判](#report-findings) | [时间线](#report-timeline) | [证据详情](#report-evidence-details)",
+            "",
+        ]
 
     lines = [
         anchor_tag("report-conclusion"),
@@ -2733,6 +2999,7 @@ def prepare_report_context(
     environment_constraints = as_dict(scene_reconstruction.get("environment_constraints") or data.get("collection_constraints"))
     contradiction_review = as_dict(scene_reconstruction.get("contradiction_review"))
     second_pass_review = as_dict(data.get("second_pass_review") or scene_reconstruction.get("second_pass_review"))
+    collection_failure = as_dict(data.get("collection_failure"))
     remote_trust = as_dict(data.get("remote_trust"))
     privilege_scope = as_dict(scene_reconstruction.get("privilege_scope"))
     time_norm = as_dict(scene_reconstruction.get("time_normalization"))
@@ -2816,6 +3083,8 @@ def prepare_report_context(
         "environment_constraints": environment_constraints,
         "contradiction_review": contradiction_review,
         "second_pass_review": second_pass_review,
+        "collection_failure": collection_failure,
+        "collection_failed": str(collection_failure.get("status", "")).strip().lower() == "failed",
         "remote_trust": remote_trust,
         "privilege_scope": privilege_scope,
         "time_norm": time_norm,
@@ -3148,9 +3417,15 @@ def build_report(data: dict[str, Any], redact: bool, strict: bool, case_dir: str
     if ctx["log_integrity"]:
         for item in ctx["log_integrity"]:
             status = str(item.get("status", "unknown"))
-            icon = "??" if status.lower() in {"missing", "tampered", "suspicious"} else "?"
+            marker = (
+                "WARN"
+                if status.lower() in {"missing", "tampered", "suspicious"}
+                else "OK"
+                if status.lower() == "ok"
+                else "INFO"
+            )
             lines.extend([
-                f"### {icon} {maybe_redact(str(item.get('artifact', 'unknown')))}",
+                f"### {marker} {maybe_redact(str(item.get('artifact', 'unknown')))}",
                 f"- **Status:** `{status}`",
                 f"- **Reason:** {maybe_redact(str(item.get('reason', '-')) or '-')}",
                 f"- **Evidence Chain:** {evidence_reference_list(as_list(item.get('evidence_ids')), ctx['evid_idx'], case_dir)}",
@@ -3191,7 +3466,7 @@ def build_report(data: dict[str, Any], redact: bool, strict: bool, case_dir: str
             lines.append(f'<a id="{evidence_anchor(evidence_id)}"></a>')
             lines.append("<details>")
             lines.append(
-                f"<summary><strong>{evidence_id}</strong> ? {maybe_redact(str(item.get('source', 'unknown')))} ? {maybe_redact(str(item.get('observed_at', 'unknown')))} ? {maybe_redact(compact_text(str(item.get('command', '')), max_len=96))}</summary>"
+                f"<summary><strong>{evidence_id}</strong> :: {maybe_redact(str(item.get('source', 'unknown')))} :: {maybe_redact(str(item.get('observed_at', 'unknown')))} :: {maybe_redact(compact_text(str(item.get('command', '')), max_len=96))}</summary>"
             )
             lines.extend([
                 "",

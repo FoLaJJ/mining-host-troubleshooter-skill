@@ -48,6 +48,8 @@ You can add control constraints directly in plain language:
 1. **Trust Bootstrap**: verify target identity and SSH trust chain.
 2. **Distro First**: identify distro family, kernel, package-manager family, and actual privilege scope first.
 3. **Readonly Sweep**: low-impact collection with timeout and fallback paths.
+   - Remote auth fallback stays conservative: stop immediately on credential failure or host-key mismatch.
+   - Only a very limited single downgrade is allowed for non-auth issues such as shell/channel compatibility.
 4. **Deep Correlation**: correlate process/network/persistence/container/cloud/GPU/local-privesc evidence, including small behavioral differences.
 5. **Second-Pass Self-Review**: re-check timeline quality, scope closure, distro-aware log layout, false-positive risk, and required external pivots before reporting.
 6. **Confidence-Gated Conclusion**: output confirmed vs inconclusive without fabrication.
@@ -60,6 +62,7 @@ You can add control constraints directly in plain language:
 - Parses suspicious runtime commands from systemd `ExecStart` and cron/crontab entries.
 - Uses multi-path read-only GPU probing instead of relying on `nvidia-smi` alone, combining `lspci`, `lshw`, `/dev/dri`, `/sys/class/drm`, `/proc/driver/nvidia`, `rocm-smi`, and related surfaces when present.
 - Captures command-missing/fallback markers and makes visibility limits explicit in reports.
+- If remote collection fails, the workflow still writes a failure bundle, operator brief, external-evidence checklist, and full reports inside the current case directory instead of stopping artifact generation.
 - Separates primary conclusions from investigative leads, forcing evidence-linked wording and keeping log loss, command pollution, and vulnerability exposure distinct from confirmed attacker actions.
 - Treats dual-use remote-control tools such as Sunlogin, ToDesk, AnyDesk, RustDesk, and TeamViewer as neutral observed software by default, escalating only when abnormal-use evidence exists.
 - Detects distro/kernel/package identity early so log locations and package evidence can be interpreted correctly.
@@ -186,10 +189,13 @@ node scripts/install-skill.mjs install --target codex --force
 node scripts/install-skill.mjs install --target cc-switch --force
 ```
 
+If this machine already has an older Codex copy, prefer the `--target codex --force` form above.
+It replaces `~/.codex/skills/mining-host-troubleshooter-skill` and removes the older alias directory so Codex does not keep loading a stale install.
+
 Custom path:
 
 ```bash
-node scripts/install-skill.mjs install --dest /path/to/skills --name mining-host-troubleshooter --force
+node scripts/install-skill.mjs install --dest /path/to/skills --name mining-host-troubleshooter-skill --force
 ```
 
 Show target paths:
@@ -203,6 +209,8 @@ After publishing to npm/private registry:
 ```bash
 npx mining-host-troubleshooter-skill install --target agents
 ```
+
+Restart `Codex` after replacing the local install so the new skill version is picked up.
 
 ## Safety Boundary
 

@@ -113,6 +113,23 @@ def load_json_file(path: str) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def load_optional_json_file(path: str) -> dict:
+    try:
+        return load_json_file(path)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def collection_failure_summary(evidence_path: str) -> dict:
+    payload = load_optional_json_file(evidence_path)
+    failure = payload.get("collection_failure") if isinstance(payload.get("collection_failure"), dict) else {}
+    return {
+        "status": str(failure.get("status", "")).strip().lower(),
+        "phase": str(failure.get("phase", "")).strip(),
+        "reason": str(failure.get("reason", "")).strip(),
+    }
+
+
 def expected_report_outputs(case_dir: str) -> list[Path]:
     base = Path(case_dir)
     reports_dir = base / "reports"
@@ -522,19 +539,50 @@ def main() -> int:
 
     collect_cmd = build_collect_cmd(args, collect_script)
     code, collect_out = run_step("collect_live_evidence", collect_cmd)
-    if code != 0:
-        print("[ERROR] collect_live_evidence failed", file=sys.stderr)
-        return code
-
     evidence_path, case_dir = parse_collect_output(collect_out)
     if not evidence_path or not case_dir:
         print("[ERROR] Could not parse evidence path/case dir from collector output.", file=sys.stderr)
-        return 2
+        return code or 2
+    collection_failed = code != 0
+    collection_failure = collection_failure_summary(evidence_path) if collection_failed else {}
+    if collection_failed:
+        print(
+            "[WARN] collect_live_evidence returned a failure bundle; continuing in degraded report-only mode.",
+            file=sys.stderr,
+        )
     evidence_for_next = evidence_path
-    write_checkpoint(case_dir, "workflow_started", extra={"mode": "AUTOMATED_WORKFLOW", "remote": bool(args.remote), "profile": args.profile, "expected_workload": bool(args.expected_workload)})
+    workflow_note = (
+        collection_failure.get("reason")
+        or "Collector returned a failure bundle before host-side evidence could be gathered."
+    )
+    write_checkpoint(
+        case_dir,
+        "workflow_started",
+        status="degraded" if collection_failed else "completed",
+        note=workflow_note if collection_failed else "",
+        extra={
+            "mode": "AUTOMATED_WORKFLOW",
+            "remote": bool(args.remote),
+            "profile": args.profile,
+            "expected_workload": bool(args.expected_workload),
+            "collection_failed": collection_failed,
+        },
+    )
     if args.remote:
-        write_checkpoint(case_dir, "trust_bootstrap_complete", extra={"evidence_path": evidence_for_next})
-    write_checkpoint(case_dir, "low_impact_readonly_sweep_complete", extra={"evidence_path": evidence_for_next})
+        write_checkpoint(
+            case_dir,
+            "trust_bootstrap_complete",
+            status="degraded" if collection_failed else "completed",
+            note=collection_failure.get("phase", "") if collection_failed else "",
+            extra={"evidence_path": evidence_for_next},
+        )
+    write_checkpoint(
+        case_dir,
+        "low_impact_readonly_sweep_complete",
+        status="failed" if collection_failed else "completed",
+        note=workflow_note if collection_failed else "",
+        extra={"evidence_path": evidence_for_next},
+    )
 
     if preflight_json:
         write_meta_json(case_dir, "preflight.local.json", preflight_json)
@@ -543,7 +591,7 @@ def main() -> int:
     write_meta_json(case_dir, "workflow_profile.json", json.dumps(build_workflow_profile_summary(args), ensure_ascii=False))
     export_sidecar_summaries(case_dir, evidence_path, preflight_json=preflight_json, log_json=log_json)
 
-    if not args.skip_enrich:
+    if not collection_failed and not args.skip_enrich:
         enriched_path = str(Path(case_dir) / "evidence" / "evidence.reviewed.auto.json")
         enrich_cmd = [
             sys.executable,
@@ -582,7 +630,7 @@ def main() -> int:
             if args.require_enrich:
                 return code
 
-    if not args.skip_validate:
+    if not collection_failed and not args.skip_validate:
         validate_cmd = [
             sys.executable,
             str(validate_script),
@@ -601,7 +649,9 @@ def main() -> int:
             return code
         write_checkpoint(case_dir, "confidence_gated_conclusions_complete", extra={"validation_path": str(Path(case_dir) / "meta" / "case_validation.json")})
 
-    if args.baseline:
+    if collection_failed and args.baseline:
+        print("[WARN] apply_host_baseline skipped because host-side collection failed.", file=sys.stderr)
+    elif args.baseline:
         baseline_cmd = [
             sys.executable,
             str(baseline_script),
@@ -674,7 +724,9 @@ def main() -> int:
         )
         write_checkpoint(case_dir, "report_output_contract_verified", extra={"expected_output_count": len(expected_report_outputs(case_dir))})
 
-    if args.compare_base_case:
+    if collection_failed and args.compare_base_case:
+        print("[WARN] compare_case_bundles skipped because host-side collection failed.", file=sys.stderr)
+    elif args.compare_base_case:
         compare_cmd = [
             sys.executable,
             str(compare_script),
@@ -694,7 +746,10 @@ def main() -> int:
         write_checkpoint(case_dir, "case_comparison_complete", extra={"base_case": args.compare_base_case})
 
     write_checkpoint(case_dir, "workflow_completed")
-    print("[DONE] Workflow completed.")
+    if collection_failed:
+        print("[DONE] Workflow completed in degraded mode.")
+    else:
+        print("[DONE] Workflow completed.")
     print(f"[DONE] Case dir: {case_dir}")
     print(f"[DONE] Evidence: {evidence_for_next}")
     if args.baseline:

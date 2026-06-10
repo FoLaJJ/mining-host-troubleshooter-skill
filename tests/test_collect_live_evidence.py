@@ -58,6 +58,57 @@ class CollectLiveEvidenceTests(unittest.TestCase):
             "Running service collection should appear once in the readonly probe set.",
         )
 
+    def test_transport_negotiation_stops_after_auth_failure(self) -> None:
+        attempts = []
+
+        def first(_command: str) -> tuple[int, str, str]:
+            attempts.append("paramiko_password")
+            return 255, "", "paramiko_auth_failed"
+
+        def second(_command: str) -> tuple[int, str, str]:
+            attempts.append("sshpass_password")
+            return 0, "__MHT_REMOTE_OK__", ""
+
+        candidate, diag = collect_live_evidence.negotiate_remote_transport(
+            [
+                collect_live_evidence.RemoteTransportCandidate("paramiko_password", first),
+                collect_live_evidence.RemoteTransportCandidate("sshpass_password", second),
+            ],
+            "printf '__MHT_REMOTE_OK__'",
+            max_attempts=2,
+        )
+
+        self.assertIsNone(candidate)
+        self.assertEqual(attempts, ["paramiko_password"])
+        self.assertEqual(diag[0]["failure_class"], "auth_failed")
+
+    def test_transport_negotiation_falls_back_once_for_non_auth_failure(self) -> None:
+        attempts = []
+
+        def first(_command: str) -> tuple[int, str, str]:
+            attempts.append("paramiko_password")
+            return 255, "", "paramiko_transport_unavailable"
+
+        def second(_command: str) -> tuple[int, str, str]:
+            attempts.append("sshpass_password")
+            return 0, "__MHT_REMOTE_OK__", ""
+
+        candidate, diag = collect_live_evidence.negotiate_remote_transport(
+            [
+                collect_live_evidence.RemoteTransportCandidate("paramiko_password", first),
+                collect_live_evidence.RemoteTransportCandidate("sshpass_password", second),
+            ],
+            "printf '__MHT_REMOTE_OK__'",
+            max_attempts=2,
+        )
+
+        self.assertIsNotNone(candidate)
+        assert candidate is not None
+        self.assertEqual(candidate.name, "sshpass_password")
+        self.assertEqual(attempts, ["paramiko_password", "sshpass_password"])
+        self.assertEqual(diag[0]["failure_class"], "transport_unavailable")
+        self.assertEqual(diag[1]["status"], "selected")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -69,6 +69,50 @@ class RunReadonlyWorkflowTests(unittest.TestCase):
                 ],
             )
 
+    def test_workflow_exports_failure_bundle_when_collect_step_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            case_dir = Path(tmp) / "case"
+            evidence_dir = case_dir / "evidence"
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            failed_path = evidence_dir / "evidence.collection.failed.json"
+            failed_path.write_text("{}", encoding="utf-8")
+            step_order = []
+
+            def fake_run_step(name: str, cmd: list[str]) -> tuple[int, str]:
+                step_order.append(name)
+                if name == "collect_live_evidence":
+                    return 10, (
+                        f"Evidence JSON written: {failed_path}\n"
+                        f"Case dir: {case_dir}\n"
+                    )
+                return 0, ""
+
+            argv = [
+                "run_readonly_workflow.py",
+                "--remote-user",
+                "ubuntu",
+                "--remote-ip",
+                "203.0.113.10",
+            ]
+
+            with (
+                patch.object(sys, "argv", argv),
+                patch.object(run_readonly_workflow, "run_step", side_effect=fake_run_step),
+                patch.object(run_readonly_workflow, "verify_expected_report_outputs"),
+            ):
+                rc = run_readonly_workflow.main()
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(
+                step_order,
+                [
+                    "collect_live_evidence",
+                    "generate_operator_brief",
+                    "export_external_evidence_checklist",
+                    "export_investigation_report",
+                ],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

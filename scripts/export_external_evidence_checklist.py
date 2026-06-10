@@ -50,6 +50,52 @@ def load_json(path: Path) -> dict[str, Any]:
 def build_checklist(data: dict[str, Any]) -> str:
     incident = as_dict(data.get("incident"))
     host = as_dict(data.get("host"))
+    collection_failure = as_dict(data.get("collection_failure"))
+    if str(collection_failure.get("status", "")).strip().lower() == "failed":
+        safe_to_retry = bool(collection_failure.get("safe_to_retry_without_new_credentials", False))
+        lines = [
+            f"# External Evidence Checklist - {incident.get('id', 'unknown')}",
+            "",
+            f"- Host: `{host.get('name', 'unknown')}` ({host.get('ip', 'unknown')})",
+            f"- Case ID: `{data.get('case_id', 'unknown')}`",
+            "- Goal: preserve the failed collection context, fix trust/auth/channel blockers, and collect external evidence while host-side evidence is unavailable.",
+            "",
+            "## Collection failure",
+            f"- Status: `{collection_failure.get('status', 'unknown')}`",
+            f"- Phase: `{collection_failure.get('phase', 'unknown')}`",
+            f"- Reason: {collection_failure.get('reason', '-')}",
+            f"- Safe to retry same credentials: `{'yes' if safe_to_retry else 'no'}`",
+            f"- Retry guidance: {collection_failure.get('retry_guidance', '-')}",
+            "",
+            "## Priority Pivots",
+        ]
+        if safe_to_retry:
+            lines.append("- Validate host-key trust, remote shell availability, and SSH transport compatibility before a single controlled retry.")
+        else:
+            lines.append("- Do not blindly retry the same credentials. Review login-failure counters, credential validity, and access policy before any further attempt.")
+        lines.extend(
+            [
+                "- Pull bastion, VPN, IdP, jump-host, and boundary authentication logs for the intended UTC window because host-side evidence is not yet available.",
+                "- Preserve the current failure bundle, operator timestamps, and pinned trust material so the next read-only run remains attributable.",
+                "- If remote trust was partially established, compare known_hosts or fingerprint sources out-of-band before reconnecting.",
+                "",
+                "## Sources To Request",
+                "- Cloud audit trail: `not_collected`",
+                "- Kubernetes audit logs: `not_collected`",
+                "- Container registry pull history: `not_collected`",
+                "- Identity provider / bastion logs: `not_collected`",
+                "- CI/CD pipeline and secret-store logs: `not_collected`",
+                "- Firewall / NAT / proxy / DNS telemetry: `not_collected`",
+                "",
+                "## Rules",
+                "- Mark unavailable sources explicitly instead of inferring their contents.",
+                "- Record exact time windows and timezone basis when requesting external evidence.",
+                "- Preserve original export files and hashes if external evidence is later attached to the case.",
+                "",
+            ]
+        )
+        return "\n".join(lines).strip() + "\n"
+
     scene = as_dict(data.get("scene_reconstruction"))
     second_pass = as_dict(data.get("second_pass_review") or scene.get("second_pass_review"))
     scope_review = as_dict(second_pass.get("scope_closure_review") or scene.get("scope_closure_review"))

@@ -1,6 +1,7 @@
 import sys
 import tempfile
 import unittest
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -116,6 +117,132 @@ class ExportInvestigationReportTests(unittest.TestCase):
         self.assertIn("## 🧪 Second-Pass Review", body)
         self.assertIn("timeline_window_narrow", body)
         self.assertIn("Identity / boundary authentication logs", body)
+
+    def test_leadership_report_surfaces_collection_failure(self) -> None:
+        data = {
+            "incident": {"id": "INC-1", "title": "Case 1"},
+            "host": {"name": "host-1", "ip": "1.2.3.4", "os": "ubuntu"},
+            "collection_failure": {
+                "status": "failed",
+                "phase": "remote_command_precheck",
+                "reason": "Remote command channel unavailable before collection.",
+            },
+        }
+
+        body = export_investigation_report.build_leadership_report(data, redact=False, case_dir=None)
+        self.assertIn("Collection failed before host-side evidence could be gathered.", body)
+        self.assertIn("Remote command channel unavailable before collection.", body)
+
+    def test_english_report_avoids_placeholder_question_mark_formatting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            case_dir = Path(tmp) / "case"
+            case_dir.mkdir()
+            artifact = case_dir / "artifact.txt"
+            artifact.write_text(
+                "[COMMAND]\nps aux | grep miner\n\n[STDOUT]\nroot 1 0.0 0.1 miner\n\n[STDERR]\n",
+                encoding="utf-8",
+            )
+            data = {
+                "incident": {"id": "INC-2", "title": "Case 2"},
+                "host": {"name": "host-2", "ip": "2.2.2.2", "os": "ubuntu"},
+                "generated_at": "2026-06-10T00:00:00+00:00",
+                "evidence": [
+                    {
+                        "id": "E-1",
+                        "source": "process",
+                        "observed_at": "2026-06-10T00:00:01+00:00",
+                        "command": "ps aux | grep miner",
+                        "artifact": str(artifact),
+                        "command_hash": "c",
+                        "artifact_hash": "a",
+                        "artifact_size_bytes": 123,
+                        "timed_out": False,
+                    }
+                ],
+                "findings": [
+                    {
+                        "id": "F-1",
+                        "statement": "Miner-like process observed",
+                        "claim_type": "observed_fact",
+                        "confidence": "medium",
+                        "confidence_reason": "visible in process list",
+                        "hypothesis_id": "H-1",
+                        "evidence_ids": ["E-1"],
+                    }
+                ],
+                "timeline": [
+                    {
+                        "time": "2026-06-10T00:00:01+00:00",
+                        "normalized_time_utc": "2026-06-10T00:00:01+00:00",
+                        "event": "Miner process observed",
+                        "source": "process",
+                        "evidence_ids": ["E-1"],
+                    }
+                ],
+                "hypothesis_matrix": [
+                    {
+                        "hypothesis_id": "H-1",
+                        "title": "CPU runtime miner hypothesis",
+                        "status": "supported",
+                        "confidence": "medium",
+                        "summary": "Miner-like process observed",
+                        "supporting_evidence_ids": ["E-1"],
+                        "counter_evidence_ids": [],
+                    }
+                ],
+                "scene_reconstruction": {
+                    "process_ioc_match_count": 1,
+                    "runtime_profile_count": 1,
+                    "runtime_profiles": [
+                        {
+                            "executable": "/tmp/xmrig",
+                            "algorithm": "randomx",
+                            "pool": "pool.example",
+                            "proxy": "-",
+                            "wallet": "wallet1",
+                            "password": "x",
+                            "cpu_threads": "8",
+                            "origin_path": "/proc/123/cmdline",
+                            "origin_line": "1",
+                            "evidence_id": "E-1",
+                        }
+                    ],
+                    "runtime_algorithms": ["randomx"],
+                    "runtime_pools": ["pool.example"],
+                    "runtime_proxies": ["-"],
+                    "runtime_wallets": ["wallet1"],
+                    "runtime_passwords": ["x"],
+                    "runtime_cpu_threads": ["8"],
+                },
+                "ip_traces": [
+                    {
+                        "ip": "8.8.8.8",
+                        "role": "remote",
+                        "trace_status": "unknown",
+                        "reason": "not traced",
+                        "evidence_ids": ["E-1"],
+                    }
+                ],
+                "log_integrity": [
+                    {
+                        "artifact": "/var/log/auth.log",
+                        "status": "ok",
+                        "reason": "present",
+                        "evidence_ids": ["E-1"],
+                    }
+                ],
+            }
+
+            body, _ = export_investigation_report.build_report(
+                json.loads(json.dumps(data)),
+                redact=False,
+                strict=False,
+                case_dir=str(case_dir),
+            )
+
+        self.assertNotIn("<summary><strong>E-1</strong> ?", body)
+        self.assertIn("<summary><strong>E-1</strong> :: process :: 2026-06-10T00:00:01+00:00 ::", body)
+        self.assertIn("### OK /var/log/auth.log", body)
 
 
 if __name__ == "__main__":

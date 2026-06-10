@@ -21,7 +21,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 try:
     import paramiko
@@ -33,6 +33,13 @@ except Exception:  # pragma: no cover - optional runtime dependency
 class Probe:
     source: str
     command: str
+
+
+@dataclass
+class RemoteTransportCandidate:
+    name: str
+    run: Callable[[str], tuple[int, str, str]]
+    close: Callable[[], None] | None = None
 
 
 class ParamikoRemoteSession:
@@ -83,7 +90,7 @@ class ParamikoRemoteSession:
         try:
             self.connect()
             assert self.client is not None
-            wrapped = f"bash -lc {shlex.quote(cmd)}"
+            wrapped = wrap_remote_shell_command(cmd)
             stdin, stdout, stderr = self.client.exec_command(wrapped, timeout=self.timeout)
             stdout.channel.settimeout(self.timeout)
             stderr.channel.settimeout(self.timeout)
@@ -94,6 +101,17 @@ class ParamikoRemoteSession:
         except (socket.timeout, TimeoutError):
             return timeout_result(self.timeout)
         except Exception as exc:
+            if paramiko is not None and isinstance(exc, paramiko.AuthenticationException):
+                return 255, "", "paramiko_auth_failed"
+            if paramiko is not None and isinstance(exc, paramiko.BadHostKeyException):
+                return 255, "", "paramiko_bad_host_key"
+            message = str(exc).strip().lower()
+            if "timed out" in message or "timeout" in message:
+                return timeout_result(self.timeout)
+            if "unable to open channel" in message or "channel" in message:
+                return 255, "", f"paramiko_channel_unavailable: {exc}"
+            if "no existing session" in message or "error reading ssh protocol banner" in message:
+                return 255, "", f"paramiko_transport_unavailable: {exc}"
             return 1, "", f"paramiko_error: {exc}"
 
     def close(self) -> None:
@@ -342,6 +360,113 @@ UBUNTU_PRIVESC_DETECTOR_CMD = (
 
 def command_hash(command: str) -> str:
     return hashlib.sha256(command.encode("utf-8", errors="replace")).hexdigest()
+
+
+def wrap_remote_shell_command(cmd: str) -> str:
+    inner = (
+        f"if command -v bash >/dev/null 2>&1; then "
+        f"exec bash -lc {shlex.quote(cmd)}; "
+        f"elif command -v sh >/dev/null 2>&1; then "
+        f"exec sh -lc {shlex.quote(cmd)}; "
+        f"else echo 'remote_shell_unavailable' >&2; exit 127; fi"
+    )
+    return f"sh -lc {shlex.quote(inner)}"
+
+
+def compact_error(text: str, limit: int = 220) -> str:
+    value = re.sub(r"\s+", " ", str(text or "").strip())
+    if len(value) <= limit:
+        return value
+    return value[: limit - 3] + "..."
+
+
+def classify_remote_failure(code: int, err: str) -> str:
+    text = str(err or "").strip().lower()
+    if code == 0:
+        return "ok"
+    if code == 124 or "probe_timeout_after_" in text or "timed out" in text or "timeout" in text:
+        return "timeout"
+    if any(
+        token in text
+        for token in [
+            "permission denied",
+            "authentication failed",
+            "auth failed",
+            "paramiko_auth_failed",
+            "invalid credentials",
+            "too many authentication failures",
+            "account locked",
+            "maximum authentication attempts",
+            "access denied",
+        ]
+    ):
+        return "auth_failed"
+    if any(
+        token in text
+        for token in [
+            "host key verification failed",
+            "remote host identification has changed",
+            "paramiko_bad_host_key",
+            "fingerprint mismatch",
+        ]
+    ):
+        return "host_key_mismatch"
+    if any(
+        token in text
+        for token in [
+            "transport_unavailable",
+            "connection refused",
+            "network is unreachable",
+            "no route to host",
+            "could not resolve hostname",
+            "name or service not known",
+            "connection reset",
+            "connection closed",
+            "broken pipe",
+            "banner",
+            "no existing session",
+        ]
+    ):
+        return "transport_unavailable"
+    if any(token in text for token in ["remote_shell_unavailable", "bash: not found", "sh: not found"]):
+        return "shell_unavailable"
+    if "channel_unavailable" in text or "session open refused" in text or "unable to open channel" in text:
+        return "channel_unavailable"
+    return "command_failed"
+
+
+def negotiate_remote_transport(
+    candidates: list[RemoteTransportCandidate],
+    precheck_command: str,
+    *,
+    max_attempts: int = 2,
+) -> tuple[RemoteTransportCandidate | None, list[dict[str, Any]]]:
+    attempts: list[dict[str, Any]] = []
+    hard_stop_classes = {"auth_failed", "host_key_mismatch"}
+
+    for attempt_no, candidate in enumerate(candidates[: max_attempts or 1], start=1):
+        code, out, err = candidate.run(precheck_command)
+        failure_class = classify_remote_failure(code, err)
+        selected = code == 0
+        attempts.append(
+            {
+                "attempt": attempt_no,
+                "transport": candidate.name,
+                "code": code,
+                "status": "selected" if selected else "failed",
+                "failure_class": failure_class,
+                "stderr_excerpt": compact_error(err),
+                "stdout_excerpt": compact_error(out),
+            }
+        )
+        if selected:
+            return candidate, attempts
+        if candidate.close is not None:
+            candidate.close()
+        if failure_class in hard_stop_classes:
+            break
+
+    return None, attempts
 
 
 BASE_PROBES = [
@@ -945,6 +1070,39 @@ def write_known_hosts_entry(path: Path, host: str, port: int, key: Any) -> None:
     path.write_text(line, encoding="utf-8")
 
 
+def record_collection_failure_context(
+    args: argparse.Namespace,
+    *,
+    phase: str,
+    reason: str,
+    diagnostics: dict[str, Any] | None = None,
+    partial_remote_trust: dict[str, Any] | None = None,
+) -> None:
+    args.collection_failure_phase = phase
+    args.collection_failure_reason = reason
+    args.connection_diagnostics = diagnostics or {}
+    if partial_remote_trust is not None:
+        args.partial_remote_trust = partial_remote_trust
+
+
+def raise_collection_failure(
+    args: argparse.Namespace,
+    *,
+    phase: str,
+    reason: str,
+    diagnostics: dict[str, Any] | None = None,
+    partial_remote_trust: dict[str, Any] | None = None,
+) -> None:
+    record_collection_failure_context(
+        args,
+        phase=phase,
+        reason=reason,
+        diagnostics=diagnostics,
+        partial_remote_trust=partial_remote_trust,
+    )
+    raise SystemExit(reason)
+
+
 def bootstrap_remote_trust(args: argparse.Namespace) -> dict[str, Any]:
     if not args.remote:
         args.trust_known_hosts_files = []
@@ -956,37 +1114,80 @@ def bootstrap_remote_trust(args: argparse.Namespace) -> dict[str, Any]:
         }
 
     if "@" not in args.remote:
-        raise SystemExit("--remote must be in user@host format.")
+        raise_collection_failure(
+            args,
+            phase="remote_trust_bootstrap",
+            reason="--remote must be in user@host format.",
+        )
     _username, host = args.remote.split("@", 1)
     port = args.port or 22
 
     if args.host_key_fingerprint:
         expected = normalize_fingerprint(args.host_key_fingerprint)
+        pinned_path = Path(args.case_meta_dir) / "pinned_known_hosts"
         if paramiko is not None:
-            server_key = fetch_remote_server_key(host, port, args.timeout)
-            observed = key_sha256_fingerprint(server_key)
-            if observed != expected:
-                raise SystemExit(
-                    f"Remote trust bootstrap failed: host key fingerprint mismatch for {host}:{port}. expected={expected} observed={observed}"
-                )
-            pinned_path = Path(args.case_meta_dir) / "pinned_known_hosts"
-            write_known_hosts_entry(pinned_path, host, port, server_key)
+            try:
+                server_key = fetch_remote_server_key(host, port, args.timeout)
+                observed = key_sha256_fingerprint(server_key)
+                if observed != expected:
+                    raise_collection_failure(
+                        args,
+                        phase="remote_trust_bootstrap",
+                        reason=(
+                            f"Remote trust bootstrap failed: host key fingerprint mismatch for {host}:{port}. "
+                            f"expected={expected} observed={observed}"
+                        ),
+                    )
+                write_known_hosts_entry(pinned_path, host, port, server_key)
+            except Exception:
+                line = fetch_remote_server_key_line(host, port, args.timeout)
+                if not line:
+                    raise_collection_failure(
+                        args,
+                        phase="remote_trust_bootstrap",
+                        reason=f"Remote trust bootstrap failed: unable to fetch remote host key for {host}:{port}.",
+                    )
+                observed = fingerprint_from_known_hosts_line(line)
+                if not observed:
+                    raise_collection_failure(
+                        args,
+                        phase="remote_trust_bootstrap",
+                        reason=f"Remote trust bootstrap failed: unable to derive fingerprint for {host}:{port}.",
+                    )
+                if observed != expected:
+                    raise_collection_failure(
+                        args,
+                        phase="remote_trust_bootstrap",
+                        reason=(
+                            f"Remote trust bootstrap failed: host key fingerprint mismatch for {host}:{port}. "
+                            f"expected={expected} observed={observed}"
+                        ),
+                    )
+                write_known_hosts_line(pinned_path, line)
         else:
             line = fetch_remote_server_key_line(host, port, args.timeout)
             if not line:
-                raise SystemExit(
-                    f"Remote trust bootstrap failed: unable to fetch remote host key for {host}:{port}."
+                raise_collection_failure(
+                    args,
+                    phase="remote_trust_bootstrap",
+                    reason=f"Remote trust bootstrap failed: unable to fetch remote host key for {host}:{port}.",
                 )
             observed = fingerprint_from_known_hosts_line(line)
             if not observed:
-                raise SystemExit(
-                    f"Remote trust bootstrap failed: unable to derive fingerprint for {host}:{port}."
+                raise_collection_failure(
+                    args,
+                    phase="remote_trust_bootstrap",
+                    reason=f"Remote trust bootstrap failed: unable to derive fingerprint for {host}:{port}.",
                 )
             if observed != expected:
-                raise SystemExit(
-                    f"Remote trust bootstrap failed: host key fingerprint mismatch for {host}:{port}. expected={expected} observed={observed}"
+                raise_collection_failure(
+                    args,
+                    phase="remote_trust_bootstrap",
+                    reason=(
+                        f"Remote trust bootstrap failed: host key fingerprint mismatch for {host}:{port}. "
+                        f"expected={expected} observed={observed}"
+                    ),
                 )
-            pinned_path = Path(args.case_meta_dir) / "pinned_known_hosts"
             write_known_hosts_line(pinned_path, line)
         args.runtime_known_hosts = str(pinned_path)
         args.trust_known_hosts_files = [str(pinned_path)]
@@ -1008,19 +1209,40 @@ def bootstrap_remote_trust(args: argparse.Namespace) -> dict[str, Any]:
         if args.trust_on_first_use:
             pinned_path = Path(args.case_meta_dir) / "pinned_known_hosts"
             if paramiko is not None:
-                server_key = fetch_remote_server_key(host, port, args.timeout)
-                observed = key_sha256_fingerprint(server_key)
-                write_known_hosts_entry(pinned_path, host, port, server_key)
+                try:
+                    server_key = fetch_remote_server_key(host, port, args.timeout)
+                    observed = key_sha256_fingerprint(server_key)
+                    write_known_hosts_entry(pinned_path, host, port, server_key)
+                except Exception:
+                    line = fetch_remote_server_key_line(host, port, args.timeout)
+                    if not line:
+                        raise_collection_failure(
+                            args,
+                            phase="remote_trust_bootstrap",
+                            reason=f"Remote trust bootstrap failed: unable to fetch remote host key for {host}:{port}.",
+                        )
+                    observed = fingerprint_from_known_hosts_line(line)
+                    if not observed:
+                        raise_collection_failure(
+                            args,
+                            phase="remote_trust_bootstrap",
+                            reason=f"Remote trust bootstrap failed: unable to derive fingerprint for {host}:{port}.",
+                        )
+                    write_known_hosts_line(pinned_path, line)
             else:
                 line = fetch_remote_server_key_line(host, port, args.timeout)
                 if not line:
-                    raise SystemExit(
-                        f"Remote trust bootstrap failed: unable to fetch remote host key for {host}:{port}."
+                    raise_collection_failure(
+                        args,
+                        phase="remote_trust_bootstrap",
+                        reason=f"Remote trust bootstrap failed: unable to fetch remote host key for {host}:{port}.",
                     )
                 observed = fingerprint_from_known_hosts_line(line)
                 if not observed:
-                    raise SystemExit(
-                        f"Remote trust bootstrap failed: unable to derive fingerprint for {host}:{port}."
+                    raise_collection_failure(
+                        args,
+                        phase="remote_trust_bootstrap",
+                        reason=f"Remote trust bootstrap failed: unable to derive fingerprint for {host}:{port}.",
                     )
                 write_known_hosts_line(pinned_path, line)
             args.runtime_known_hosts = str(pinned_path)
@@ -1035,9 +1257,13 @@ def bootstrap_remote_trust(args: argparse.Namespace) -> dict[str, Any]:
                 "known_hosts_path": str(pinned_path),
                 "warning": "Host key accepted on first seen. Re-verify out-of-band for high-risk environments.",
             }
-        raise SystemExit(
-            "Remote trust bootstrap failed: no trusted host-key source found. "
-            "Provide --host-key-fingerprint or --known-hosts, or pre-populate known_hosts before collection."
+        raise_collection_failure(
+            args,
+            phase="remote_trust_bootstrap",
+            reason=(
+                "Remote trust bootstrap failed: no trusted host-key source found. "
+                "Provide --host-key-fingerprint or --known-hosts, or pre-populate known_hosts before collection."
+            ),
         )
     args.trust_known_hosts_files = known_hosts_files
     args.runtime_known_hosts = str(Path(args.known_hosts).expanduser()) if getattr(args, "known_hosts", "") else ""
@@ -1074,7 +1300,7 @@ def build_ssh_prefix(args: argparse.Namespace, *, batch_mode: bool = True) -> li
 
 
 def run_remote(prefix: list[str], cmd: str, timeout: int) -> tuple[int, str, str]:
-    wrapped = f"bash -lc {shlex.quote(cmd)}"
+    wrapped = wrap_remote_shell_command(cmd)
     try:
         proc = subprocess.run(
             prefix + [wrapped],
@@ -1089,7 +1315,7 @@ def run_remote(prefix: list[str], cmd: str, timeout: int) -> tuple[int, str, str
 
 
 def run_remote_password_sshpass(prefix: list[str], cmd: str, timeout: int, password: str) -> tuple[int, str, str]:
-    wrapped = f"bash -lc {shlex.quote(cmd)}"
+    wrapped = wrap_remote_shell_command(cmd)
     env = os.environ.copy()
     env["SSHPASS"] = password
     try:
@@ -1149,6 +1375,142 @@ def parse_log_integrity(text: str, evidence_id: str) -> list[dict[str, Any]]:
     return entries
 
 
+def build_transport_diagnostics(
+    attempts: list[dict[str, Any]],
+    *,
+    selected_transport: str = "",
+    retry_budget: int = 2,
+) -> dict[str, Any]:
+    return {
+        "selected_transport": selected_transport or "none",
+        "attempt_count": len(attempts),
+        "retry_budget": retry_budget,
+        "attempts": attempts,
+    }
+
+
+def establish_remote_runner(args: argparse.Namespace, trust_info: dict[str, Any]) -> tuple[Callable[[str], tuple[int, str, str]], Any | None]:
+    if not args.remote:
+        return (lambda command: run_local(command, args.timeout)), None
+
+    precheck = "printf '__MHT_REMOTE_OK__'"
+
+    if args.password:
+        if "@" not in args.remote:
+            raise_collection_failure(
+                args,
+                phase="remote_command_precheck",
+                reason="--remote must be in user@host format when using --password.",
+                partial_remote_trust=trust_info,
+            )
+        username, host = args.remote.split("@", 1)
+        candidates: list[RemoteTransportCandidate] = []
+        paramiko_session: ParamikoRemoteSession | None = None
+        if paramiko is not None:
+            paramiko_session = ParamikoRemoteSession(
+                host=host,
+                username=username,
+                password=args.password,
+                port=args.port or 22,
+                timeout=args.timeout,
+                known_hosts_files=list(getattr(args, "trust_known_hosts_files", [])),
+            )
+            candidates.append(
+                RemoteTransportCandidate(
+                    "paramiko_password",
+                    lambda command, session=paramiko_session: session.run(command),
+                    close=paramiko_session.close,
+                )
+            )
+        sshpass_prefix: list[str] = []
+        if shutil.which("sshpass") is not None:
+            sshpass_prefix = build_ssh_prefix(args, batch_mode=False)
+            candidates.append(
+                RemoteTransportCandidate(
+                    "sshpass_password",
+                    lambda command, prefix=sshpass_prefix: run_remote_password_sshpass(prefix, command, args.timeout, args.password),
+                )
+            )
+        if not candidates:
+            raise_collection_failure(
+                args,
+                phase="remote_command_precheck",
+                reason="Password-based remote mode requires paramiko or sshpass. Install one and retry.",
+                diagnostics=build_transport_diagnostics([], retry_budget=2),
+                partial_remote_trust=trust_info,
+            )
+
+        candidate, attempts = negotiate_remote_transport(candidates, precheck, max_attempts=2)
+        if candidate is None:
+            terminal = attempts[-1] if attempts else {}
+            failure_class = str(terminal.get("failure_class", "unknown"))
+            reason = (
+                "Remote authentication failed before collection. "
+                "To avoid increasing login-failure counters, no further credential retries were attempted."
+                if failure_class == "auth_failed"
+                else "Remote command channel unavailable before collection."
+            )
+            raise_collection_failure(
+                args,
+                phase="remote_command_precheck",
+                reason=reason,
+                diagnostics=build_transport_diagnostics(attempts, retry_budget=2),
+                partial_remote_trust=trust_info,
+            )
+
+        diagnostics = build_transport_diagnostics(
+            attempts,
+            selected_transport=candidate.name,
+            retry_budget=2,
+        )
+        trust_info["command_transport"] = diagnostics
+        args.connection_diagnostics = diagnostics
+        if candidate.name == "paramiko_password":
+            return candidate.run, paramiko_session
+        return candidate.run, None
+
+    remote_prefix = build_ssh_prefix(args)
+    run_fn = lambda command: run_remote(remote_prefix, command, args.timeout)
+    code, out, err = run_fn(precheck)
+    if code != 0:
+        attempts = [
+            {
+                "attempt": 1,
+                "transport": "ssh_key_or_agent",
+                "code": code,
+                "status": "failed",
+                "failure_class": classify_remote_failure(code, err),
+                "stderr_excerpt": compact_error(err),
+                "stdout_excerpt": compact_error(out),
+            }
+        ]
+        raise_collection_failure(
+            args,
+            phase="remote_command_precheck",
+            reason="Remote command channel unavailable before collection.",
+            diagnostics=build_transport_diagnostics(attempts, retry_budget=1),
+            partial_remote_trust=trust_info,
+        )
+    diagnostics = build_transport_diagnostics(
+        [
+            {
+                "attempt": 1,
+                "transport": "ssh_key_or_agent",
+                "code": 0,
+                "status": "selected",
+                "failure_class": "ok",
+                "stderr_excerpt": "",
+                "stdout_excerpt": compact_error(out),
+            }
+        ],
+        selected_transport="ssh_key_or_agent",
+        retry_budget=1,
+    )
+    trust_info["command_transport"] = diagnostics
+    args.connection_diagnostics = diagnostics
+    return run_fn, None
+
+
 def sha256_file(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as f:
@@ -1179,6 +1541,170 @@ def build_artifact_hashes(artifacts_dir: Path) -> dict[str, Any]:
     }
 
 
+def derive_auth_retry_guidance(connection_diagnostics: dict[str, Any]) -> tuple[bool, str]:
+    attempts = [item for item in connection_diagnostics.get("attempts", []) if isinstance(item, dict)]
+    if attempts and str(attempts[-1].get("failure_class", "")) == "auth_failed":
+        return (
+            False,
+            "Authentication failed. Do not blindly retry with the same credentials, because some hosts enforce login-failure counters or lockouts.",
+        )
+    return (
+        True,
+        "A transport or channel issue was observed. Review host-key trust, shell availability, or SSH transport compatibility before retrying.",
+    )
+
+
+def build_collection_failure_payload(args: argparse.Namespace, reason: str) -> dict[str, Any]:
+    requested_focus = normalize_focus_list(getattr(args, "focus", []))
+    incident_id = args.incident_id or f"INC-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6]}"
+    host_name = args.host_name or (args.remote.split("@")[-1] if args.remote else platform.node() or "local-host")
+    host_ip = args.host_ip or ("unknown-remote" if args.remote else "127.0.0.1")
+    connection_diagnostics = getattr(args, "connection_diagnostics", {}) if isinstance(getattr(args, "connection_diagnostics", {}), dict) else {}
+    safe_to_retry, retry_guidance = derive_auth_retry_guidance(connection_diagnostics)
+    phase = str(getattr(args, "collection_failure_phase", "collection_setup")).strip() or "collection_setup"
+    remote_trust = getattr(args, "partial_remote_trust", {}) if isinstance(getattr(args, "partial_remote_trust", {}), dict) else {}
+    summary = (
+        "Read-only evidence collection failed before host-side probes could complete. "
+        "No investigative conclusion is asserted from this bundle."
+    )
+    return {
+        "case_id": incident_id,
+        "host_id": sanitize_name(host_ip if host_ip not in {"unknown-remote", "127.0.0.1"} else host_name),
+        "collector_version": COLLECTOR_VERSION,
+        "report_timezone_basis": "UTC",
+        "timezone": "UTC",
+        "timezone_semantics": "Report normalization basis only; not the host local timezone.",
+        "collection_constraints": {
+            "readonly_only": True,
+            "external_tool_download_required": False,
+            "external_tool_download_attempted": False,
+            "network_assessment_mode": "passive_host_state_only",
+        },
+        "expected_workload": (args.expected_workload or "").strip(),
+        "investigation_scope": {
+            "requested_focus": requested_focus,
+            "request_summary": str(getattr(args, "request_summary", "") or "").strip(),
+            "readonly_only": True,
+            "state_change_allowed": False,
+        },
+        "remote_trust": remote_trust,
+        "collection_failure": {
+            "status": "failed",
+            "phase": phase,
+            "reason": reason,
+            "safe_to_retry_without_new_credentials": safe_to_retry,
+            "retry_guidance": retry_guidance,
+            "connection_diagnostics": connection_diagnostics,
+        },
+        "incident": {
+            "id": incident_id,
+            "title": args.title or "Mining Host Investigation",
+        },
+        "generated_at": now_utc(),
+        "analyst": args.analyst,
+        "host": {
+            "name": host_name,
+            "ip": host_ip,
+            "os": args.os_hint or "unknown",
+            "mining_mode": args.mining_mode,
+        },
+        "summary": summary,
+        "evidence": [],
+        "findings": [],
+        "timeline": [],
+        "ip_traces": [],
+        "log_integrity": [],
+        "actions": [],
+        "unknowns": sorted(set([
+            "Collection failed before host-side evidence could be gathered.",
+            reason,
+            retry_guidance,
+            "No analyst findings yet. Add only evidence-backed findings.",
+            "Mark untraceable/unknown IPs explicitly; do not infer attribution without evidence.",
+        ])),
+    }
+
+
+def write_case_outputs(layout: dict[str, Path], args: argparse.Namespace, payload: dict[str, Any], artifact_dirs: list[str]) -> Path:
+    out = layout["output_json"]
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    artifact_hashes = build_artifact_hashes(layout["artifacts_dir"])
+    layout["artifact_hashes"].write_text(
+        json.dumps(artifact_hashes, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    manifest = {
+        "case_dir": str(layout["case_dir"]),
+        "created_at_utc": now_utc(),
+        "incident_id": payload["incident"]["id"],
+        "target": {
+            "remote": args.remote or "local",
+            "host_name": payload["host"]["name"],
+            "host_ip": payload["host"]["ip"],
+            "auth_method": (
+                "password_env" if args.password_env else
+                "password_prompt" if args.prompt_password else
+                "password_cli_deprecated" if args.password else
+                "ssh_key_file" if args.identity else
+                "ssh_agent_or_default_key" if args.remote else
+                "local_shell"
+            ),
+        },
+        "paths": {
+            "evidence_json": str(out),
+            "artifacts_dir": str(layout["artifacts_dir"]),
+            "reports_dir": str(layout["reports_dir"]),
+            "artifact_hashes": str(layout["artifact_hashes"]),
+        },
+        "remote_trust": payload.get("remote_trust", {}),
+        "notes": [
+            "All commands are read-only probes.",
+            f"Requested investigation focus: {', '.join(normalize_focus_list(getattr(args, 'focus', []))) or 'general-compromise-review'}.",
+            "Add analyst-reviewed findings before final report export.",
+            "Verify artifact integrity with meta/artifact_hashes.json before external transfer.",
+        ],
+    }
+    layout["manifest"].write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    next_step_2 = (
+        "2) Review collection_failure metadata before retrying collection."
+        if as_dict(payload.get("collection_failure"))
+        else "2) Run case validation gate before final export."
+    )
+    layout["readme"].write_text(
+        "\n".join(
+            [
+                "Case Bundle Layout",
+                f"Case: {layout['case_dir']}",
+                f"Evidence JSON: {out}",
+                f"Artifacts: {layout['artifacts_dir']}",
+                f"Reports: {layout['reports_dir']}",
+                f"Artifact hashes: {layout['artifact_hashes']}",
+                "",
+                "Recommended next steps:",
+                "1) Review evidence JSON and add evidence-backed findings.",
+                next_step_2,
+                f"3) Export reports under: {layout['case_dir']}",
+                "4) Keep no-fabrication and redaction constraints enabled.",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    print(f"Evidence JSON written: {out}")
+    for p in artifact_dirs:
+        print(f"Artifacts dir: {p}")
+    print(f"Case dir: {layout['case_dir']}")
+    print(f"Reports dir: {layout['reports_dir']}")
+    print(f"Case manifest: {layout['manifest']}")
+    print(f"Artifact hashes: {layout['artifact_hashes']}")
+    if as_dict(payload.get("collection_failure")):
+        print("Next step: review collection failure metadata, fix trust/auth/channel issues, then retry the same read-only workflow")
+    else:
+        print("Next step: review JSON, add evidence-backed findings, then run export_investigation_report.py --strict")
+    return out
+
+
 def collect(args: argparse.Namespace) -> tuple[dict[str, Any], list[str]]:
     evidence: list[dict[str, Any]] = []
     log_integrity: list[dict[str, Any]] = []
@@ -1190,43 +1716,13 @@ def collect(args: argparse.Namespace) -> tuple[dict[str, Any], list[str]]:
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     trust_info = bootstrap_remote_trust(args)
-    remote_prefix = build_ssh_prefix(args) if args.remote else []
+    args.partial_remote_trust = trust_info
     session: ParamikoRemoteSession | None = None
     try:
-        if args.remote and args.password:
-            if "@" not in args.remote:
-                raise SystemExit("--remote must be in user@host format when using --password.")
-            username, host = args.remote.split("@", 1)
-            if paramiko is not None:
-                session = ParamikoRemoteSession(
-                    host=host,
-                    username=username,
-                    password=args.password,
-                    port=args.port or 22,
-                    timeout=args.timeout,
-                    known_hosts_files=list(getattr(args, "trust_known_hosts_files", [])),
-                )
-                run_fn = lambda command: session.run(command)
-            else:
-                if shutil.which("sshpass") is None:
-                    raise SystemExit(
-                        "Password-based remote mode requires paramiko or sshpass. "
-                        "Install paramiko, or install sshpass and retry."
-                    )
-                remote_prefix = build_ssh_prefix(args, batch_mode=False)
-                run_fn = lambda command: run_remote_password_sshpass(remote_prefix, command, args.timeout, args.password)
-        elif args.remote:
-            run_fn = lambda command: run_remote(remote_prefix, command, args.timeout)
+        if args.dry_run:
+            run_fn = lambda command: (0, "", "")
         else:
-            run_fn = lambda command: run_local(command, args.timeout)
-
-        if args.remote and not args.dry_run:
-            precheck_code, _, precheck_err = run_fn("true")
-            if precheck_code != 0:
-                raise SystemExit(
-                    "Remote command channel unavailable before collection. "
-                    f"reason={precheck_err or 'remote_precheck_failed'}"
-                )
+            run_fn, session = establish_remote_runner(args, trust_info)
 
         for idx, probe in enumerate(BASE_PROBES, 1):
             evidence_id = f"E-{idx:03d}"
@@ -1397,77 +1893,21 @@ def main() -> int:
     args.artifacts_dir = str(layout["artifacts_dir"])
     args.case_meta_dir = str(layout["meta_dir"])
 
-    payload, artifact_dirs = collect(args)
-    out = layout["output_json"]
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    artifact_hashes = build_artifact_hashes(layout["artifacts_dir"])
-    layout["artifact_hashes"].write_text(
-        json.dumps(artifact_hashes, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-
-    manifest = {
-        "case_dir": str(layout["case_dir"]),
-        "created_at_utc": now_utc(),
-        "incident_id": payload["incident"]["id"],
-        "target": {
-            "remote": args.remote or "local",
-            "host_name": payload["host"]["name"],
-            "host_ip": payload["host"]["ip"],
-            "auth_method": (
-                "password_env" if args.password_env else
-                "password_prompt" if args.prompt_password else
-                "password_cli_deprecated" if args.password else
-                "ssh_key_file" if args.identity else
-                "ssh_agent_or_default_key" if args.remote else
-                "local_shell"
-            ),
-        },
-        "paths": {
-            "evidence_json": str(out),
-            "artifacts_dir": str(layout["artifacts_dir"]),
-            "reports_dir": str(layout["reports_dir"]),
-            "artifact_hashes": str(layout["artifact_hashes"]),
-        },
-        "remote_trust": payload.get("remote_trust", {}),
-        "notes": [
-            "All commands are read-only probes.",
-            f"Requested investigation focus: {', '.join(normalize_focus_list(getattr(args, 'focus', []))) or 'general-compromise-review'}.",
-            "Add analyst-reviewed findings before final report export.",
-            "Verify artifact integrity with meta/artifact_hashes.json before external transfer.",
-        ],
-    }
-    layout["manifest"].write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    layout["readme"].write_text(
-        "\n".join(
-            [
-                "Case Bundle Layout",
-                f"Case: {layout['case_dir']}",
-                f"Evidence JSON: {out}",
-                f"Artifacts: {layout['artifacts_dir']}",
-                f"Reports: {layout['reports_dir']}",
-                f"Artifact hashes: {layout['artifact_hashes']}",
-                "",
-                "Recommended next steps:",
-                "1) Review evidence JSON and add evidence-backed findings.",
-                "2) Run case validation gate before final export.",
-                f"3) Export reports under: {layout['case_dir']}",
-                "4) Keep no-fabrication and redaction constraints enabled.",
-            ]
+    try:
+        payload, artifact_dirs = collect(args)
+        write_case_outputs(layout, args, payload, artifact_dirs)
+        return 0
+    except SystemExit as exc:
+        reason = str(exc) or "Collection failed before host-side probes could complete."
+        payload = build_collection_failure_payload(args, reason)
+        write_case_outputs(layout, args, payload, [str(layout["artifacts_dir"])])
+        failure_meta = layout["meta_dir"] / "collection_failure.json"
+        failure_meta.write_text(
+            json.dumps(as_dict(payload.get("collection_failure")), ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    print(f"Evidence JSON written: {out}")
-    for p in artifact_dirs:
-        print(f"Artifacts dir: {p}")
-    print(f"Case dir: {layout['case_dir']}")
-    print(f"Reports dir: {layout['reports_dir']}")
-    print(f"Case manifest: {layout['manifest']}")
-    print(f"Artifact hashes: {layout['artifact_hashes']}")
-    print("Next step: review JSON, add evidence-backed findings, then run export_investigation_report.py --strict")
-    return 0
+        print(f"Collection failure metadata: {failure_meta}")
+        return 10
 
 
 if __name__ == "__main__":

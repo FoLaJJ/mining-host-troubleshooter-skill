@@ -53,6 +53,8 @@ If the user asks for one narrow goal such as "only check whether it was breached
 7. Run a second-pass self-review before final reporting.
    - Re-check timeline quality, scope closure, distro-aware log layout, overstatement risk, and required external pivots.
 8. Export concise but detailed reports.
+9. If remote collection fails before host-side evidence is gathered, still export a failure bundle plus a clearly degraded report set.
+   - Do not silently stop without artifacts.
 
 ## Distro and Platform Rules
 
@@ -133,10 +135,13 @@ The workflow should:
 1. Keep the run read-only.
 2. Record requested focus in the case bundle.
 3. Detect distro, privilege level, and trust state early.
-4. Collect detailed evidence, including vulnerability-exposure review surfaces.
-5. Enrich evidence into timeline, runtime profiles, hypothesis matrix, file/hash correlation, and privesc plausibility notes.
-6. Run a second-pass review to keep scope gaps, timeline gaps, distro-aware log interpretation, and anti-overstatement notes explicit.
-7. Export full and leadership reports.
+4. Use conservative remote-auth fallback.
+   - Stop immediately on credential failure or host-key mismatch.
+   - Allow at most one non-auth transport downgrade such as channel/shell compatibility fallback.
+5. Collect detailed evidence, including vulnerability-exposure review surfaces.
+6. Enrich evidence into timeline, runtime profiles, hypothesis matrix, file/hash correlation, and privesc plausibility notes.
+7. Run a second-pass review to keep scope gaps, timeline gaps, distro-aware log interpretation, and anti-overstatement notes explicit.
+8. Export full and leadership reports.
 
 ## Reporting Standard
 

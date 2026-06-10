@@ -37,6 +37,21 @@ class ExportExternalEvidenceChecklistTests(unittest.TestCase):
         self.assertIn("Expand the time window using upstream telemetry", body)
         self.assertIn("Recovered event timing is incomplete for confident ingress reconstruction.", body)
 
+    def test_checklist_highlights_collection_failure(self) -> None:
+        data = {
+            "incident": {"id": "INC-1"},
+            "host": {"name": "host-1", "ip": "1.2.3.4"},
+            "collection_failure": {
+                "status": "failed",
+                "phase": "remote_command_precheck",
+                "reason": "Remote command channel unavailable before collection.",
+            },
+        }
+
+        body = export_external_evidence_checklist.build_checklist(data)
+        self.assertIn("Collection failure", body)
+        self.assertIn("Remote command channel unavailable before collection.", body)
+
 
 if __name__ == "__main__":
     unittest.main()

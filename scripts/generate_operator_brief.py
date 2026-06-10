@@ -53,6 +53,46 @@ def evidence_links(evidence_ids: list[Any], limit: int = 4) -> str:
 
 
 def build_brief_payload(data: dict[str, Any]) -> dict[str, Any]:
+    collection_failure = as_dict(data.get("collection_failure"))
+    if str(collection_failure.get("status", "")).strip().lower() == "failed":
+        scope = as_dict(data.get("investigation_scope"))
+        host = as_dict(data.get("host"))
+        incident = as_dict(data.get("incident"))
+        return {
+            "generated_at_utc": now_utc(),
+            "incident_id": str(incident.get("id", "unknown")),
+            "host_name": str(host.get("name", "unknown")),
+            "host_ip": str(host.get("ip", "unknown")),
+            "requested_focus": [str(x).strip() for x in as_list(scope.get("requested_focus")) if str(x).strip()],
+            "risk_level": "unknown",
+            "verdict": "采集失败：当前未建立主机侧证据基础，不能输出排查结论。",
+            "direct_hits": 0,
+            "review_hits": 0,
+            "log_risk_count": 0,
+            "traceable_ip_count": 0,
+            "unknown_ip_count": 0,
+            "key_hypothesis": [],
+            "key_findings": [],
+            "auth_source_ips": [],
+            "gpu_suspicious_process_count": 0,
+            "gpu_peak_utilization_percent": 0,
+            "possible_lpe_cves": [],
+            "collection_failure": {
+                "status": "failed",
+                "phase": str(collection_failure.get("phase", "unknown")),
+                "reason": str(collection_failure.get("reason", "Host-side collection failed before evidence could be gathered.")),
+                "retry_guidance": str(
+                    collection_failure.get(
+                        "retry_guidance",
+                        "Review SSH trust, authentication, and shell/channel compatibility before retrying.",
+                    )
+                ),
+                "safe_to_retry_without_new_credentials": bool(
+                    collection_failure.get("safe_to_retry_without_new_credentials", False)
+                ),
+            },
+        }
+
     scene = as_dict(data.get("scene_reconstruction"))
     second_pass = as_dict(data.get("second_pass_review") or scene.get("second_pass_review"))
     log_layout_review = as_dict(second_pass.get("log_layout_review") or scene.get("log_layout_review"))
@@ -130,6 +170,39 @@ def build_brief_payload(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_zh_md(payload: dict[str, Any], expected_workload: str) -> str:
+    failure = as_dict(payload.get("collection_failure"))
+    if str(failure.get("status", "")).strip().lower() == "failed":
+        retry_label = "可以先排查通道/信任问题后再做一次受控重试" if failure.get("safe_to_retry_without_new_credentials") else "不要盲目重复使用同一凭据重试"
+        return "\n".join(
+            [
+                "# 业务排查简报（给非安全专业用户）",
+                "",
+                f"- 生成时间（UTC）：`{payload['generated_at_utc']}`",
+                f"- 事件 ID：`{payload['incident_id']}`",
+                f"- 目标主机：`{payload['host_name']}` (`{payload['host_ip']}`)",
+                "",
+                "## 一句话结论",
+                f"- **{payload['verdict']}**",
+                f"- 排查焦点：`{', '.join(payload['requested_focus']) or 'general-compromise-review'}`",
+                "",
+                "## 当前阻塞点",
+                f"- 失败阶段：`{failure.get('phase', 'unknown')}`",
+                f"- 失败原因：{failure.get('reason', '-')}",
+                f"- 重试原则：{retry_label}",
+                f"- 操作建议：{failure.get('retry_guidance', '-')}",
+                "",
+                "## 你接下来应该做什么",
+                "1. 先看 `./external-evidence-checklist.md`，按清单补拉登录边界、堡垒机、VPN、云审计等外部证据。",
+                "2. 修正 SSH 信任、认证或远端 shell/channel 问题后，再执行一次受控的只读采集。",
+                "3. 在采集成功前，不要根据这个失败案件包下“已被入侵”或“没有问题”的结论。",
+                "",
+                "## 重要提醒",
+                "- 本简报不执行任何改动操作，只如实说明当前证据状态。",
+                "- 失败案件包仍应保留，方便后续复核连接问题和时间线。",
+                "",
+            ]
+        )
+
     lines = [
         "# 业务排查简报（给非安全专业用户）",
         "",
@@ -185,6 +258,39 @@ def build_zh_md(payload: dict[str, Any], expected_workload: str) -> str:
 
 
 def build_en_md(payload: dict[str, Any], expected_workload: str) -> str:
+    failure = as_dict(payload.get("collection_failure"))
+    if str(failure.get("status", "")).strip().lower() == "failed":
+        retry_label = (
+            "A single controlled retry may be reasonable after trust/channel review."
+            if failure.get("safe_to_retry_without_new_credentials")
+            else "Do not blindly retry with the same credentials."
+        )
+        return "\n".join(
+            [
+                "# Operator Brief (Non-Specialist View)",
+                "",
+                f"- Generated At (UTC): `{payload['generated_at_utc']}`",
+                f"- Incident ID: `{payload['incident_id']}`",
+                f"- Host: `{payload['host_name']}` (`{payload['host_ip']}`)",
+                "",
+                "## One-Line Verdict",
+                f"- **{payload['verdict']}**",
+                f"- Requested focus: `{', '.join(payload['requested_focus']) or 'general-compromise-review'}`",
+                "",
+                "## Collection Blocker",
+                f"- Failure phase: `{failure.get('phase', 'unknown')}`",
+                f"- Reason: {failure.get('reason', '-')}",
+                f"- Retry posture: {retry_label}",
+                f"- Guidance: {failure.get('retry_guidance', '-')}",
+                "",
+                "## Next Steps",
+                "1. Review `./external-evidence-checklist.md` first for boundary and identity sources.",
+                "2. Fix SSH trust, auth, or remote shell/channel issues before one controlled read-only rerun.",
+                "3. Do not draw a host-compromise conclusion from this failed collection bundle alone.",
+                "",
+            ]
+        )
+
     lines = [
         "# Operator Brief (Non-Specialist View)",
         "",

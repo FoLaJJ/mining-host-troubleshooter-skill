@@ -76,6 +76,22 @@ class GenerateOperatorBriefTests(unittest.TestCase):
         self.assertEqual(payload["log_risk_count"], 0)
         self.assertEqual(payload["risk_level"], "low")
 
+    def test_operator_brief_marks_collection_failure_as_unknown(self) -> None:
+        data = {
+            "collection_failure": {
+                "status": "failed",
+                "phase": "remote_command_precheck",
+                "reason": "Remote command channel unavailable before collection.",
+            },
+            "host": {"name": "host-1", "ip": "1.2.3.4"},
+            "incident": {"id": "INC-1"},
+            "investigation_scope": {"requested_focus": ["intrusion-review"]},
+        }
+
+        payload = generate_operator_brief.build_brief_payload(data)
+        self.assertEqual(payload["risk_level"], "unknown")
+        self.assertIn("采集失败", payload["verdict"])
+
 
 if __name__ == "__main__":
     unittest.main()

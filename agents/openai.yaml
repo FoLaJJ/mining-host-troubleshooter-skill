@@ -12,6 +12,9 @@ interface:
     conclusions conservative: separate
     observed_fact, inference, and attribution; require concrete evidence IDs for
     every key conclusion; treat weak clues as inconclusive investigative leads;
+    use conservative remote-auth fallback, stopping immediately on credential
+    failure or host-key mismatch; if host-side collection fails, still export a
+    degraded failure bundle and reports inside the current case directory;
     treat dual-use remote-control tools as observed presence unless abnormal
     authorization, path, startup, or timeline evidence supports suspicious use;
     treat missing logs as visibility loss unless corroborated; treat vulnerable

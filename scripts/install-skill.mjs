@@ -5,7 +5,8 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-const SKILL_NAME = "mining-host-troubleshooter";
+const SKILL_NAME = "mining-host-troubleshooter-skill";
+const LEGACY_SKILL_NAMES = ["mining-host-troubleshooter"];
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const TARGETS = {
@@ -26,7 +27,7 @@ Examples:
   mining-host-troubleshooter-skill install --target codex
   mining-host-troubleshooter-skill install --target agents
   mining-host-troubleshooter-skill install --target cc-switch
-  mining-host-troubleshooter-skill install --dest ~/custom-skills --name mining-host-troubleshooter
+  mining-host-troubleshooter-skill install --dest ~/custom-skills --name mining-host-troubleshooter-skill
 `);
 }
 
@@ -111,6 +112,8 @@ function shouldSkip(sourcePath) {
     "node_modules",
     "__pycache__",
     ".pytest_cache",
+    "gcm-diagnose.log",
+    "INTERVIEW_PREP.md",
   ];
   if (blocked.some((part) => rel === part || rel.startsWith(`${part}/`))) {
     return true;
@@ -141,10 +144,30 @@ async function copyTree(source, dest) {
   await fs.copyFile(source, dest);
 }
 
+async function removeLegacyAliases(root, finalDir, installName) {
+  const aliases = new Set([SKILL_NAME, ...LEGACY_SKILL_NAMES]);
+  if (!aliases.has(installName)) {
+    return;
+  }
+  const finalResolved = path.resolve(finalDir);
+  for (const alias of aliases) {
+    const aliasDir = path.join(root, alias);
+    if (path.resolve(aliasDir) === finalResolved) {
+      continue;
+    }
+    if (await exists(aliasDir)) {
+      await fs.rm(aliasDir, { recursive: true, force: true });
+    }
+  }
+}
+
 async function install(args) {
   const root = await resolveTargetRoot(args.target, args.dest);
   const finalDir = path.join(root, args.name);
   await fs.mkdir(root, { recursive: true });
+  if (args.force) {
+    await removeLegacyAliases(root, finalDir, args.name);
+  }
   if (await exists(finalDir)) {
     if (!args.force) {
       throw new Error(`Target already exists: ${finalDir}. Use --force to replace it.`);
