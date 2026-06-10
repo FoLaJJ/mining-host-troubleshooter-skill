@@ -10,6 +10,7 @@ from pathlib import Path
 from run_readonly_workflow import (
     collection_failure_summary,
     expected_report_outputs,
+    load_optional_json_file,
     run_step,
     verify_expected_report_outputs,
     write_checkpoint,
@@ -34,9 +35,25 @@ def classify_input(path: Path) -> str:
         if path.name == filename:
             return input_kind
 
+    payload = load_optional_json_file(str(path))
+    if not payload:
+        raise SystemExit(
+            "Unsupported evidence JSON for report regeneration: "
+            f"{path}. Supported files are: "
+            + ", ".join(filename for _, filename in SUPPORTED_INPUTS)
+        )
+
     failure = collection_failure_summary(str(path))
     if failure.get("status") == "failed":
         return "failure_bundle"
+    if isinstance(payload.get("second_pass_review"), dict):
+        return "reviewed"
+    if isinstance(payload.get("scene_reconstruction"), dict):
+        return "reviewed_auto"
+    if isinstance(payload.get("enrichment"), dict):
+        return "reviewed_auto"
+    if any(key in payload for key in ("incident", "host", "evidence", "findings", "timeline")):
+        return "raw"
 
     raise SystemExit(
         "Unsupported evidence JSON for report regeneration: "

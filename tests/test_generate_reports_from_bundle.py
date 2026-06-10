@@ -190,6 +190,56 @@ class GenerateReportsFromBundleTests(unittest.TestCase):
 
             self.assertIn("No supported evidence JSON", str(ctx.exception))
 
+    def test_explicit_input_override_accepts_noncanonical_case_evidence_name(self) -> None:
+        generate_reports_from_bundle = self.load_module()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            case_dir = Path(tmp) / "case"
+            evidence_dir = case_dir / "evidence"
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            override = case_dir / "custom-reviewed-copy.json"
+            override.write_text(
+                json.dumps(
+                    {
+                        "incident": {"id": "INC-1"},
+                        "host": {"name": "host-1"},
+                        "evidence": [],
+                        "second_pass_review": {"status": "completed"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            commands = []
+
+            def fake_run_step(name: str, cmd: list[str]) -> tuple[int, str]:
+                commands.append((name, cmd))
+                return 0, "{}"
+
+            argv = [
+                "generate_reports_from_bundle.py",
+                "--case-dir",
+                str(case_dir),
+                "--input",
+                str(override),
+            ]
+            with (
+                patch.object(sys, "argv", argv),
+                patch.object(generate_reports_from_bundle, "run_step", side_effect=fake_run_step),
+                patch.object(generate_reports_from_bundle, "verify_expected_report_outputs"),
+            ):
+                rc = generate_reports_from_bundle.main()
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(
+                [name for name, _ in commands],
+                [
+                    "validate_case_bundle",
+                    "generate_operator_brief",
+                    "export_external_evidence_checklist",
+                    "export_investigation_report",
+                ],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
