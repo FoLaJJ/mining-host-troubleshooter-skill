@@ -58,11 +58,13 @@ PROC_EXE_MAP_RE = re.compile(r"^\s*(?P<pid>\d+)\|(?P<exe>[^|]+)\|(?P<cmd>.*)$")
 PROC_FALLBACK_RE = re.compile(r"^\s*(?P<pid>\d+)\|(?P<state>[A-Za-z])\|(?P<cmd>.+)$")
 PROCESS_BINARY_HASH_RE = re.compile(r"^\s*(?P<pid>\d+)\|(?P<path>[^|]+)\|(?P<sha>[a-fA-F0-9]{64})$")
 CANDIDATE_BINARY_HASH_RE = re.compile(r"^\s*(?P<path>/[^|]+)\|(?P<sha>[a-fA-F0-9]{64})$")
+DELETED_EXE_RE = re.compile(r"/proc/(?P<pid>\d+)/exe\s+->\s+(?P<path>.+?)\s+\(deleted\)$")
 GREP_CTX_RE = re.compile(r"^(?P<path>[^:\n]+):(?P<line>\d+):(?P<body>.*)$")
 TRUST_RESOLUTION_RE = re.compile(r"^cmd=(?P<cmd>[^|]+)\|resolved=(?P<resolved>[^|]+)\|real=(?P<real>.+)$")
 TRUST_CANDIDATE_RE = re.compile(r"^candidate=(?P<cmd>[^|]+)\|path=(?P<path>[^|]+)\|real=(?P<real>.+)$")
 IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 ANY_IPV4_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
+OUTBOUND_TOOL_RE = re.compile(r"\b(ssh|scp|sftp|rsync|nc|ncat|socat|curl|wget|autossh|frp|frpc|frps)\b", re.I)
 RUNTIME_HINT_RE = re.compile(
     r"(?:\bxmrig\b|\bgminer\b|\blolminer\b|\btrex\b|\bnbminer\b|\bsrb\b|\bstratum(?:\+|://)?\b|"
     r"--algorithm\b|--algo\b|\bkawpow\b|\brandomx\b|\bethash\b|\betchash\b|"
@@ -192,6 +194,13 @@ def parse_socket_address(value: str) -> tuple[str, str]:
     return text, ""
 
 
+def port_int(value: str) -> int:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return 0
+
+
 def is_loopback_host(host: str) -> bool:
     value = (host or "").strip().strip("[]").lower()
     return value == "::1" or value.startswith("127.") or value.endswith("127.0.0.1") or value == "localhost"
@@ -208,6 +217,73 @@ def parse_socket_process(value: str) -> tuple[str, str]:
     if netstat_match:
         return netstat_match.group("pid").strip(), netstat_match.group("proc").strip()
     return "", ""
+
+
+def is_temp_or_userland_exec(path: str) -> bool:
+    text = str(path or "").strip()
+    return text.startswith(("/tmp/", "/var/tmp/", "/dev/shm/", "/run/", "/root/.cache/", "/root/.local/", "/home/"))
+
+
+def probable_outbound_connection(connection: dict[str, str], listen_ports: set[str]) -> bool:
+    process = str(connection.get("process", "")).strip().lower()
+    local_port = str(connection.get("local_port", "")).strip()
+    remote_port = str(connection.get("remote_port", "")).strip()
+    local_port_int = port_int(local_port)
+    remote_port_int = port_int(remote_port)
+    if process == "sshd" and local_port == "22":
+        return False
+    if process in {"ssh", "scp", "sftp", "rsync", "nc", "ncat", "socat", "curl", "wget", "autossh", "frp", "frpc", "frps"}:
+        return True
+    if local_port and local_port not in listen_ports and local_port_int >= 1024:
+        return True
+    if remote_port_int and remote_port_int in {22, 80, 81, 443, 873, 8080, 8443} and local_port_int >= 1024:
+        return True
+    return False
+
+
+def toolchain_signal_label(tool: str) -> str:
+    normalized = str(tool or "").strip().lower()
+    return f"{normalized}_toolchain" if normalized else "toolchain"
+
+
+def extract_toolchain_targets(
+    command_text: str,
+    evidence_id: str,
+    pid: str = "",
+    path: str = "",
+    process_name: str = "",
+) -> list[dict[str, Any]]:
+    text = compact_space(command_text)
+    if not text:
+        return []
+    tool_match = OUTBOUND_TOOL_RE.search(text)
+    if not tool_match:
+        return []
+    tool = tool_match.group(1).strip().lower()
+    seen: set[str] = set()
+    targets: list[dict[str, Any]] = []
+    for ip in ANY_IPV4_RE.findall(text):
+        if not IPV4_RE.fullmatch(ip) or is_loopback_host(ip) or ip in seen:
+            continue
+        seen.add(ip)
+        port = ""
+        pm = re.search(rf"{re.escape(ip)}:(?P<port>\d{{1,5}})", text)
+        if pm:
+            port = pm.group("port").strip()
+        targets.append(
+            {
+                "ip": ip,
+                "port": port,
+                "pid": str(pid).strip(),
+                "process": str(process_name).strip() or tool,
+                "path": str(path).strip(),
+                "command": text,
+                "tool": tool,
+                "supporting_signals": [toolchain_signal_label(tool)],
+                "evidence_ids": [str(evidence_id).strip()],
+            }
+        )
+    return targets
 
 
 def parse_listening_port_line(line: str) -> str:
@@ -862,6 +938,9 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
     top_cpu_processes: list[dict[str, Any]] = []
     process_exe_by_pid: dict[str, str] = {}
     process_cmd_by_pid: dict[str, str] = {}
+    process_pid_evidence_ids: dict[str, set[str]] = {}
+    process_tool_targets: dict[str, dict[str, Any]] = {}
+    deleted_exe_by_pid: dict[str, dict[str, Any]] = {}
     runtime_profiles: list[dict[str, Any]] = []
     established_connections: list[dict[str, str]] = []
     established_connection_keys: set[tuple[str, str, str, str, str, str]] = set()
@@ -921,6 +1000,44 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
     current_session_remote_map: dict[str, set[str]] = {}
     current_session_samples: list[str] = []
     current_session_sample_seen: set[str] = set()
+
+    def merge_tool_target(item: dict[str, Any]) -> None:
+        ip = str(item.get("ip", "")).strip()
+        if not ip:
+            return
+        rec = process_tool_targets.setdefault(
+            ip,
+            {
+                "ip": ip,
+                "port": "",
+                "pid": "",
+                "process": "",
+                "path": "",
+                "commands": [],
+                "tool": "",
+                "supporting_signals": set(),
+                "evidence_ids": set(),
+            },
+        )
+        if not rec["port"] and str(item.get("port", "")).strip():
+            rec["port"] = str(item.get("port", "")).strip()
+        if not rec["pid"] and str(item.get("pid", "")).strip():
+            rec["pid"] = str(item.get("pid", "")).strip()
+        if not rec["process"] and str(item.get("process", "")).strip():
+            rec["process"] = str(item.get("process", "")).strip()
+        if not rec["path"] and str(item.get("path", "")).strip():
+            rec["path"] = str(item.get("path", "")).strip()
+        if not rec["tool"] and str(item.get("tool", "")).strip():
+            rec["tool"] = str(item.get("tool", "")).strip()
+        for signal in as_list(item.get("supporting_signals")):
+            if str(signal).strip():
+                rec["supporting_signals"].add(str(signal).strip())
+        for evid in as_list(item.get("evidence_ids")):
+            if str(evid).strip():
+                rec["evidence_ids"].add(str(evid).strip())
+        command_sample = str(item.get("command", "")).strip()
+        if command_sample and command_sample not in rec["commands"] and len(rec["commands"]) < 4:
+            rec["commands"].append(command_sample)
 
     def add_timeline(observed_at: str, event: str, source: str, evid_id: str) -> None:
         timeline_add.append(
@@ -1114,18 +1231,54 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
 
         if source == "process":
             for line in stdout.splitlines():
+                stripped = line.strip()
                 entry = parse_top_process_line(line)
                 if entry and len(top_cpu_processes) < 40:
                     top_cpu_processes.append(entry)
-                m = PROC_EXE_MAP_RE.match(line.strip())
+                m = PROC_EXE_MAP_RE.match(stripped)
                 if m:
                     pid = m.group("pid").strip()
                     exe = m.group("exe").strip()
                     cmdline = compact_space(m.group("cmd"))
                     if pid:
                         process_exe_by_pid[pid] = exe
+                        process_pid_evidence_ids.setdefault(pid, set()).add(evid_id)
                         if cmdline:
                             process_cmd_by_pid[pid] = cmdline
+                            for target in extract_toolchain_targets(
+                                cmdline,
+                                evid_id,
+                                pid=pid,
+                                path=exe,
+                                process_name=Path(exe).name,
+                            ):
+                                merge_tool_target(target)
+                    continue
+                deleted_match = DELETED_EXE_RE.search(stripped)
+                if deleted_match:
+                    pid = deleted_match.group("pid").strip()
+                    path = deleted_match.group("path").strip()
+                    rec = deleted_exe_by_pid.setdefault(
+                        pid,
+                        {
+                            "pid": pid,
+                            "path": path,
+                            "evidence_ids": set(),
+                        },
+                    )
+                    if not rec.get("path") and path:
+                        rec["path"] = path
+                    rec["evidence_ids"].add(evid_id)
+
+        if source in {"service", "persistence", "binary_drop"}:
+            for line in stdout.splitlines():
+                for target in extract_toolchain_targets(line, evid_id):
+                    merge_tool_target(target)
+
+        if source == "auth" and "history" in command.lower():
+            for line in stdout.splitlines():
+                for target in extract_toolchain_targets(line, evid_id):
+                    merge_tool_target(target)
 
         if source == "gpu":
             gpu_probe_ids.add(evid_id)
@@ -1435,6 +1588,137 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
             }
         )
     malware_file_candidates = dedupe_hash_entries(malware_file_candidates)
+
+    active_outbound_peers: list[dict[str, Any]] = []
+    active_outbound_by_ip: dict[str, dict[str, Any]] = {}
+    for connection in established_connections:
+        if not probable_outbound_connection(connection, listen_ports):
+            continue
+        pid = str(connection.get("pid", "")).strip()
+        remote_ip = str(connection.get("remote_ip", "")).strip()
+        if not remote_ip:
+            continue
+        rec = active_outbound_by_ip.setdefault(
+            remote_ip,
+            {
+                "ip": remote_ip,
+                "port": str(connection.get("remote_port", "")).strip(),
+                "pid": pid,
+                "process": str(connection.get("process", "")).strip(),
+                "path": process_exe_by_pid.get(pid, ""),
+                "command": process_cmd_by_pid.get(pid, ""),
+                "classification": "observed_fact",
+                "confidence_reason": "Current established connection only.",
+                "supporting_signals": ["active_connection"],
+                "counter_signals": [],
+                "evidence_ids": set(established_remote_map.get(remote_ip, set())),
+            },
+        )
+        rec["evidence_ids"].update(process_pid_evidence_ids.get(pid, set()))
+        if not rec["pid"] and pid:
+            rec["pid"] = pid
+        if not rec["process"] and str(connection.get("process", "")).strip():
+            rec["process"] = str(connection.get("process", "")).strip()
+        if not rec["path"] and pid in process_exe_by_pid:
+            rec["path"] = process_exe_by_pid[pid]
+        if not rec["command"] and pid in process_cmd_by_pid:
+            rec["command"] = process_cmd_by_pid[pid]
+        if not rec["port"] and str(connection.get("remote_port", "")).strip():
+            rec["port"] = str(connection.get("remote_port", "")).strip()
+    active_outbound_peers = [
+        {
+            **item,
+            "evidence_ids": sorted(item["evidence_ids"]),
+        }
+        for item in active_outbound_by_ip.values()
+    ]
+
+    conservative_lateral_targets: list[dict[str, Any]] = []
+    for ip, active in active_outbound_by_ip.items():
+        tool_target = process_tool_targets.get(ip)
+        if not tool_target:
+            continue
+        signal_labels = {"active_connection"} | {
+            str(x).strip() for x in tool_target.get("supporting_signals", set()) if str(x).strip()
+        }
+        conservative_lateral_targets.append(
+            {
+                "ip": ip,
+                "port": str(active.get("port", "")).strip() or str(tool_target.get("port", "")).strip(),
+                "pid": str(active.get("pid", "")).strip() or str(tool_target.get("pid", "")).strip(),
+                "process": str(active.get("process", "")).strip() or str(tool_target.get("process", "")).strip(),
+                "path": str(active.get("path", "")).strip() or str(tool_target.get("path", "")).strip(),
+                "command": str(active.get("command", "")).strip() or " | ".join(as_list(tool_target.get("commands"))[:2]),
+                "classification": "inference",
+                "confidence_reason": "Live connection plus explicit remote-operation toolchain evidence.",
+                "supporting_signals": sorted(signal_labels),
+                "counter_signals": [],
+                "evidence_ids": sorted(set(active.get("evidence_ids", set())) | set(tool_target.get("evidence_ids", set()))),
+            }
+        )
+    conservative_lateral_targets.sort(key=lambda item: (str(item.get("ip", "")), str(item.get("port", ""))))
+
+    external_pivot_required_targets: list[dict[str, Any]] = []
+    for ip, tool_target in process_tool_targets.items():
+        if ip in active_outbound_by_ip:
+            continue
+        external_pivot_required_targets.append(
+            {
+                "ip": ip,
+                "port": str(tool_target.get("port", "")).strip(),
+                "pid": str(tool_target.get("pid", "")).strip(),
+                "process": str(tool_target.get("process", "")).strip(),
+                "path": str(tool_target.get("path", "")).strip(),
+                "command": " | ".join(as_list(tool_target.get("commands"))[:2]),
+                "classification": "external_pivot_required",
+                "confidence_reason": "Toolchain evidence exists, but no matching live connection was recovered in current host visibility.",
+                "supporting_signals": sorted(
+                    {str(x).strip() for x in tool_target.get("supporting_signals", set()) if str(x).strip()}
+                ),
+                "counter_signals": ["no_live_connection"],
+                "evidence_ids": sorted(set(tool_target.get("evidence_ids", set()))),
+            }
+        )
+    external_pivot_required_targets.sort(key=lambda item: (str(item.get("ip", "")), str(item.get("port", ""))))
+
+    deleted_exe_processes = [
+        {
+            "pid": pid,
+            "path": str(item.get("path", "")).strip(),
+            "evidence_ids": sorted(set(item.get("evidence_ids", set()))),
+        }
+        for pid, item in sorted(deleted_exe_by_pid.items())
+    ]
+    hidden_process_suspicions: list[dict[str, Any]] = []
+    for item in deleted_exe_processes:
+        pid = str(item.get("pid", "")).strip()
+        path = str(item.get("path", "")).strip()
+        active = next((peer for peer in active_outbound_peers if str(peer.get("pid", "")).strip() == pid), {})
+        command = process_cmd_by_pid.get(pid, "")
+        name = str(active.get("process", "")).strip()
+        if not name and command:
+            tokens = safe_shlex_split(command)
+            if tokens:
+                name = Path(tokens[0]).name
+        reason_parts = ["在 /proc 中观察到“已删除但仍在运行”的可执行体。"]
+        if is_temp_or_userland_exec(path):
+            reason_parts.append("可执行路径不在常见系统软件包目录中。")
+        if active:
+            reason_parts.append("同一 PID 仍持有活动外联连接。")
+        if command and path:
+            token_name = Path(safe_shlex_split(command)[0]).name if safe_shlex_split(command) else ""
+            path_name = Path(path).name
+            if token_name and token_name != path_name:
+                reason_parts.append("命令名与实际可执行路径命名存在差异。")
+        hidden_process_suspicions.append(
+            {
+                "pid": pid,
+                "name": name or Path(path).name or "unknown",
+                "path": path,
+                "reason": " ".join(reason_parts),
+                "evidence_ids": sorted(set(as_list(item.get("evidence_ids"))) | set(active.get("evidence_ids", []))),
+            }
+        )
 
     possible_lpe_cves = sorted(
         key for key, value in vuln_detector_statuses.items() if value == "possibly_vulnerable" and key.startswith("CVE-")
@@ -1879,6 +2163,26 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
                 "evidence_ids": sorted(ids),
             }
         )
+    for item in conservative_lateral_targets:
+        ip_trace_add.append(
+            {
+                "ip": str(item.get("ip", "")).strip(),
+                "role": "conservative_lateral_target",
+                "trace_status": "unknown",
+                "reason": "Live outbound connection plus corroborating remote-operation toolchain evidence.",
+                "evidence_ids": sorted(as_list(item.get("evidence_ids"))),
+            }
+        )
+    for item in external_pivot_required_targets:
+        ip_trace_add.append(
+            {
+                "ip": str(item.get("ip", "")).strip(),
+                "role": "external_pivot_required_target",
+                "trace_status": "unknown",
+                "reason": "Remote-operation toolchain evidence exists, but matching live connection visibility is missing in this host-only pass.",
+                "evidence_ids": sorted(as_list(item.get("evidence_ids"))),
+            }
+        )
 
     gpu_peak_util, gpu_visibility_status, gpu_visibility_summary = gpu_visibility_assessment(
         gpu_utilization_samples,
@@ -1943,10 +2247,24 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
             "invalid": sorted(invalid_source_map),
             "closed": sorted(closed_source_map),
         },
+        "auth_attack_review": {
+            "failed_auth_source_ips": sorted(failed_source_map),
+            "accepted_auth_source_ips": sorted(accepted_source_map),
+            "current_session_source_ips": sorted(current_session_remote_map),
+            "failed_auth_event_count": failed_count,
+            "accepted_auth_event_count": accepted_count,
+            "invalid_user_event_count": invalid_count,
+        },
         "listening_ports": sorted(listen_ports),
         "established_connection_count": len(established_connections),
         "established_remote_ips": sorted(established_remote_map),
         "established_connections": established_connections[:12],
+        "lateral_movement_review": {
+            "active_outbound_connection_count": len(active_outbound_peers),
+            "active_outbound_peers": active_outbound_peers[:20],
+            "conservative_lateral_targets": conservative_lateral_targets[:20],
+            "external_pivot_required_targets": external_pivot_required_targets[:20],
+        },
         "current_session_usernames": sorted(current_session_users),
         "current_session_remote_ips": sorted(current_session_remote_map),
         "current_session_sample_count": len(current_session_samples),
@@ -2054,6 +2372,10 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
         "process_binary_hashes": process_binary_hashes[:30],
         "candidate_binary_hashes": candidate_binary_hashes[:30],
         "malware_file_candidates": malware_file_candidates[:30],
+        "hidden_process_review": {
+            "deleted_exe_processes": deleted_exe_processes[:20],
+            "hidden_process_suspicions": hidden_process_suspicions[:20],
+        },
         "cron_runtime_candidate_count": len(cron_runtime_candidates),
         "cron_runtime_candidates": cron_runtime_candidates[:20],
         "timeline_count": len(merged_timeline),

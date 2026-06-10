@@ -135,18 +135,9 @@ def expected_report_outputs(case_dir: str) -> list[Path]:
     reports_dir = base / "reports"
     return [
         base / "report.md",
-        base / "report.zh-CN.md",
         base / "leadership-report.md",
-        base / "leadership-report.zh-CN.md",
         base / "meta" / "report-manifest.json",
-        reports_dir / "index.md",
-        reports_dir / "index.zh-CN.md",
-        reports_dir / "management-summary.md",
-        reports_dir / "management-summary.zh-CN.md",
-        reports_dir / "soc-summary.md",
-        reports_dir / "soc-summary.zh-CN.md",
         reports_dir / "operator-brief.md",
-        reports_dir / "operator-brief.zh-CN.md",
         reports_dir / "operator-brief.json",
         reports_dir / "external-evidence-checklist.md",
     ]
@@ -681,7 +672,7 @@ def main() -> int:
         if code != 0:
             print("[ERROR] generate_operator_brief failed", file=sys.stderr)
             return code
-        write_checkpoint(case_dir, "operator_brief_complete", extra={"brief_path": str(Path(case_dir) / "reports" / "operator-brief.zh-CN.md")})
+        write_checkpoint(case_dir, "operator_brief_complete", extra={"brief_path": str(Path(case_dir) / "reports" / "operator-brief.md")})
 
         checklist_cmd = [
             sys.executable,
@@ -718,8 +709,8 @@ def main() -> int:
             case_dir,
             "approval_gated_response_plan_complete",
             extra={
-                "leadership_report_path": str(Path(case_dir) / "leadership-report.zh-CN.md"),
-                "report_path": str(Path(case_dir) / "report.zh-CN.md"),
+                "leadership_report_path": str(Path(case_dir) / "leadership-report.md"),
+                "report_path": str(Path(case_dir) / "report.md"),
             },
         )
         write_checkpoint(case_dir, "report_output_contract_verified", extra={"expected_output_count": len(expected_report_outputs(case_dir))})
@@ -756,14 +747,9 @@ def main() -> int:
         print(f"[DONE] Baseline Assessment: {Path(case_dir) / 'reports' / 'baseline_assessment.md'}")
     if not args.skip_export:
         print(f"[DONE] Report: {Path(case_dir) / 'report.md'}")
-        print(f"[DONE] Chinese Report: {Path(case_dir) / 'report.zh-CN.md'}")
         print(f"[DONE] Leadership Report: {Path(case_dir) / 'leadership-report.md'}")
-        print(f"[DONE] Leadership Report (ZH): {Path(case_dir) / 'leadership-report.zh-CN.md'}")
-        print(f"[DONE] Management Summary: {Path(case_dir) / 'reports' / 'management-summary.md'}")
-        print(f"[DONE] SOC Summary: {Path(case_dir) / 'reports' / 'soc-summary.md'}")
         print(f"[DONE] External Evidence Checklist: {Path(case_dir) / 'reports' / 'external-evidence-checklist.md'}")
-        print(f"[DONE] Operator Brief (ZH): {Path(case_dir) / 'reports' / 'operator-brief.zh-CN.md'}")
-        print(f"[DONE] Operator Brief (EN): {Path(case_dir) / 'reports' / 'operator-brief.md'}")
+        print(f"[DONE] Operator Brief: {Path(case_dir) / 'reports' / 'operator-brief.md'}")
         print(f"[DONE] Report Manifest: {Path(case_dir) / 'meta' / 'report-manifest.json'}")
     return 0
 

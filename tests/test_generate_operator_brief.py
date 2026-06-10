@@ -12,7 +12,7 @@ import generate_operator_brief as generate_operator_brief  # noqa: E402
 
 
 class GenerateOperatorBriefTests(unittest.TestCase):
-    def test_operator_brief_uses_case_root_and_same_directory_summary_links(self) -> None:
+    def test_operator_brief_is_chinese_only_and_links_to_canonical_case_reports(self) -> None:
         payload = {
             "generated_at_utc": "2026-06-09T00:00:00+00:00",
             "incident_id": "INC-1",
@@ -34,15 +34,12 @@ class GenerateOperatorBriefTests(unittest.TestCase):
         }
 
         zh = generate_operator_brief.build_zh_md(payload, "")
-        en = generate_operator_brief.build_en_md(payload, "")
-
-        self.assertIn("../report.zh-CN.md", zh)
-        self.assertIn("./soc-summary.zh-CN.md", zh)
-        self.assertNotIn("../reports/soc-summary.zh-CN.md", zh)
-
-        self.assertIn("../report.md", en)
-        self.assertIn("./soc-summary.md", en)
-        self.assertNotIn("../reports/soc-summary.md", en)
+        self.assertIn("../report.md", zh)
+        self.assertIn("../leadership-report.md", zh)
+        self.assertNotIn("zh-CN", zh)
+        self.assertNotIn("soc-summary", zh)
+        self.assertNotIn("management-summary", zh)
+        self.assertNotIn("Review the hypothesis matrix", zh)
 
     def test_operator_brief_prefers_second_pass_adjusted_log_risk_count(self) -> None:
         data = {

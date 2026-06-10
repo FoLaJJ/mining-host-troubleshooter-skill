@@ -16,6 +16,18 @@ import run_readonly_workflow as run_readonly_workflow  # noqa: E402
 
 
 class RunReadonlyWorkflowTests(unittest.TestCase):
+    def test_expected_report_outputs_are_chinese_single_track(self) -> None:
+        outputs = [str(path).replace("\\", "/") for path in run_readonly_workflow.expected_report_outputs("/tmp/case")]
+        self.assertIn("/tmp/case/report.md", outputs)
+        self.assertIn("/tmp/case/leadership-report.md", outputs)
+        self.assertIn("/tmp/case/reports/operator-brief.md", outputs)
+        self.assertIn("/tmp/case/reports/external-evidence-checklist.md", outputs)
+        self.assertNotIn("/tmp/case/report.zh-CN.md", outputs)
+        self.assertNotIn("/tmp/case/leadership-report.zh-CN.md", outputs)
+        self.assertFalse(any("management-summary" in item for item in outputs))
+        self.assertFalse(any("soc-summary" in item for item in outputs))
+        self.assertFalse(any("index.md" in item for item in outputs))
+
     def test_workflow_invokes_second_pass_review_between_enrich_and_validate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             case_dir = Path(tmp) / "case"
