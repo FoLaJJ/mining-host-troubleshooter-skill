@@ -392,12 +392,17 @@ def localize_auto_text_zh_cn(text: str) -> str:
         "Fix trust/auth/channel issues, preserve the failure bundle, and use external telemetry only as temporary corroboration before rerunning read-only collection.": "先修复信任、认证或通道问题，保留失败案件包，并且仅把外部遥测作为临时补证；完成后再重新执行只读采集。",
         "Host-side service exposure was not collected because collection failed before probes completed.": "由于探针采集在完成前失败，本轮未取得主机侧服务暴露面信息。",
         "No host-side lateral-movement assessment was possible because collection failed before evidence gathering.": "由于主机侧证据采集未成功，本轮无法对横向移动做主机侧判断。",
+        "Direct miner-like runtime indicators were observed during collection.": "本次采集中观察到了直接的挖矿类运行时指标。",
+        "Triage should proceed as a compromise-oriented case, but attribution still requires additional evidence.": "当前应按疑似入侵方向继续排查，但攻击者归因仍需更多证据。",
         "No direct miner IOC was observed in this collection. Current results are limited to review surfaces that still require analyst confirmation.": "本次采集中未观察到直接的挖矿 IOC，当前结果主要是需要人工复核的访问面与环境侧线索。",
         "This does not clear the host. The present output supports review-driven triage, not a confirmed mining-compromise conclusion.": "这并不能证明主机安全无虞。当前输出仅支持复核驱动的分诊，不足以下结论为已确认的挖矿入侵。",
         "Absence of indicators in this pass is not proof of absence; visibility, timing, and privilege may still be incomplete.": "本轮未见指标并不等于不存在问题；当前可见性、采集时机和权限范围仍可能不完整。",
         "Prioritize runtime lineage, parent-child process review, wallet/pool traces, and persistence pivots.": "优先复核运行链路、父子进程关系、钱包或矿池痕迹，以及持久化支点。",
         "Prioritize surviving access traces, service startup context, container/cloud exposure, and deleted-log fallback artifacts.": "优先复核现存访问痕迹、服务启动上下文、容器或云侧暴露面，以及日志缺失后的替代证据。",
         "Expand time window, privilege visibility, and external telemetry correlation before closing the case.": "在结案前应继续扩展时间窗口、权限可见性，并补做外部遥测关联。",
+        "No direct miner runtime string was parsed in this pass; conclusions remain bound to review surfaces and visible runtime artifacts only.": "本轮未直接解析出矿工运行时字符串，当前结论仍仅限于已见复核面和可见运行时证据。",
+        "Current persistence review surfaces are dominated by vendor-managed startup lines or account metadata. That does not independently establish a malicious foothold.": "当前持久化复核面主要由厂商管理的启动项或账号元数据构成，单凭这些内容不足以独立证明恶意落地。",
+        "Successful authentication sources exist, but host-only evidence cannot yet distinguish authorized administration from attacker reuse of valid access.": "已观察到成功认证来源，但仅凭主机证据仍无法区分正常运维与攻击者复用现有合法访问。",
         "Second-pass review found no mandatory external corroboration gaps for the requested host-only scope.": "二轮复核认为，就当前指定的主机侧只读范围而言，没有发现必须追加的外部补证门槛。",
         "Second-pass review kept explicit open gaps visible; do not over-close the case on host evidence alone.": "二轮复核保留了明确的未闭环缺口，不能仅凭主机侧证据把案件过度定性为已闭环。",
         "No reconstructable timeline entries were recovered from current host evidence.": "当前主机证据中未恢复出可用于重建的时间线条目。",
@@ -509,8 +514,16 @@ def localize_auto_text_zh_cn(text: str) -> str:
             lambda m: f"访问面或持久化复核返回了值得关注的记录，例如：{m.group(1)}",
         ),
         (
+            re.compile(r"^Persistence review still contains high-signal startup or privileged policy lines: (.+)$"),
+            lambda m: f"持久化复核面仍存在高信号启动项或高权限策略线索，例如：{m.group(1)}",
+        ),
+        (
             re.compile(r"^Network IOC review produced hits such as: (.+)$"),
             lambda m: f"网络 IOC 复核返回了值得关注的命中，例如：{m.group(1)}",
+        ),
+        (
+            re.compile(r"^Internal/private source IPs appeared in authentication evidence: (.+)\.$"),
+            lambda m: f"认证类证据中出现了内网或私网来源 IP：{m.group(1).replace(', ', '、')}。",
         ),
         (
             re.compile(
@@ -1532,11 +1545,8 @@ def leadership_payload(ctx: dict[str, Any]) -> dict[str, Any]:
     if accepted_sources:
         ingress_hypotheses.append(
             {
-                "label": (
-                    "Accepted login sources were re-reviewed. Some may reflect the current investigation session or recurring administration, "
-                    "but host-only evidence still cannot prove authorization."
-                ),
-                "label_zh": "已对 Accepted 登录来源做二轮复核：其中部分可能是当前排查会话或重复运维来源，但仅凭主机证据仍不能直接证明其已获授权。",
+                "label": "Successful authentication sources exist, but host-only evidence cannot yet distinguish authorized administration from attacker reuse of valid access.",
+                "label_zh": "已观察到成功认证来源，但仅凭主机证据仍无法区分正常运维与攻击者复用现有合法访问。",
                 "confidence": "low",
                 "basis": (
                     f"current_session_candidates={accepted_auth_review.get('current_session_candidate_count', 0)}, "
@@ -1594,11 +1604,11 @@ def leadership_payload(ctx: dict[str, Any]) -> dict[str, Any]:
         )
     if str(persistence_review.get("status", "")) == "baseline_or_vendor_dominated":
         activity_summary.append(
-            "Second-pass review found the current persistence review surfaces are dominated by vendor-managed startup lines or account metadata. That does not independently establish a malicious foothold."
+            "Current persistence review surfaces are dominated by vendor-managed startup lines or account metadata. That does not independently establish a malicious foothold."
         )
     elif str(persistence_review.get("status", "")) == "high_signal_present":
         activity_summary.append(
-            f"Second-pass review kept persistence concern active because high-signal startup or privileged policy lines remain present: {compact_text(str(persistence_review.get('summary', '-')), max_len=220)}"
+            f"Persistence review still contains high-signal startup or privileged policy lines: {compact_text(str(persistence_review.get('summary', '-')), max_len=220)}"
         )
     elif access_hits:
         activity_summary.append(f"Access or persistence review surfaces returned notable lines such as: {compact_text(access_hits[0], max_len=200)}")
@@ -1682,547 +1692,892 @@ def leadership_payload(ctx: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def leadership_matrix_rows(ctx: dict[str, Any], payload: dict[str, Any]) -> list[dict[str, str]]:
-    posture = investigation_posture_payload(ctx)
-    if collection_failed(ctx):
-        phase = str(payload.get("collection_failure_phase", "unknown") or "unknown")
-        reason = str(payload.get("collection_failure_reason", "Host-side collection failed before evidence could be gathered."))
-        retry_guidance = str(payload.get("collection_retry_guidance", "-"))
-        return [
-            {
-                "claim_type": "observed_fact",
-                "confidence": "unknown",
-                "statement": "Collection failed before host-side evidence could be gathered.",
-                "statement_zh": "主机侧证据尚未建立前，采集流程已经失败。",
-                "basis": reason,
-                "basis_zh": reason,
-            },
-            {
-                "claim_type": "inference",
-                "confidence": "unknown",
-                "statement": "No host-side compromise conclusion can be drawn from this bundle.",
-                "statement_zh": "当前不能基于该失败案件包输出主机侧入侵结论。",
-                "basis": f"phase={phase}; {retry_guidance}",
-                "basis_zh": f"phase={phase}; {retry_guidance}",
-            },
-            {
-                "claim_type": "attribution",
-                "confidence": "unknown",
-                "statement": "No access-path or actor attribution can be made until host-side collection succeeds.",
-                "statement_zh": "在主机侧采集成功前，无法进行入口路径或攻击者归因。",
-                "basis": "host-side evidence unavailable",
-                "basis_zh": "host-side evidence unavailable",
-            },
-        ]
+def confidence_rank(value: str) -> int:
+    return {"high": 3, "medium": 2, "low": 1, "unknown": 0}.get(str(value).strip().lower(), 0)
 
-    trace_counts = ctx["trace_counts"]
-    gpu_status_zh = {
-        "suspicious_runtime": "已见可疑运行时",
-        "active_no_direct_miner_match": "存在活动但未直接命中矿工",
-        "hardware_visible_no_runtime": "硬件可见但未见运行时",
-        "tooling_limited": "工具受限",
-        "not_observed": "未观察到",
-        "unknown": "未知",
-    }.get(payload["gpu_visibility_status"], payload["gpu_visibility_status"])
-    gpu_summary_zh = (
-        f"status={gpu_status_zh}，vendors={'、'.join(payload['gpu_vendor_hints']) or '无'}，"
-        f"adapter_lines={len(as_list(ctx['scene_reconstruction'].get('gpu_adapter_samples')))}，"
-        f"compute_processes={ctx['scene_reconstruction'].get('gpu_compute_process_count', 0)}，"
-        f"suspicious_processes={payload['gpu_suspicious']}，peak_utilization={payload['gpu_peak']}%，"
-        f"fallback_markers={'、'.join(payload['gpu_fallback_markers']) or '无'}"
-    )
-    rows: list[dict[str, str]] = []
-    if payload["runtime_profile_count"] or posture["process_hits"] or posture["network_hits"] or posture["gpu_hits"]:
-        rows.append(
+
+def natural_join(items: list[str], conjunction: str = "and") -> str:
+    cleaned = [str(item).strip() for item in items if str(item).strip()]
+    if not cleaned:
+        return ""
+    if len(cleaned) == 1:
+        return cleaned[0]
+    if len(cleaned) == 2:
+        return f"{cleaned[0]} {conjunction} {cleaned[1]}"
+    return f"{', '.join(cleaned[:-1])}, {conjunction} {cleaned[-1]}"
+
+
+def zh_natural_join(items: list[str]) -> str:
+    return "、".join(str(item).strip() for item in items if str(item).strip())
+
+
+def leadership_case_id(data: dict[str, Any], ctx: dict[str, Any]) -> str:
+    return str(data.get("case_id") or ctx.get("incident_id") or "unknown")
+
+
+def public_scope_pivot_label(value: str) -> str:
+    return {
+        "identity_boundary_logs": "identity-provider, bastion, or boundary authentication records",
+        "peer_host_internal_auth_pivot": "peer-host or internal-authentication records",
+        "cloud_control_plane_audit": "cloud or container control-plane records",
+        "boundary_telemetry_for_log_loss": "boundary telemetry to compensate for reduced host-log visibility",
+        "timeline_expansion": "expanded timeline evidence",
+        "contradiction_resolution": "cross-source contradiction review",
+        "privesc_change_records": "admin change-history or package-backport records",
+    }.get(str(value).strip(), "")
+
+
+def public_scope_pivot_label_zh_cn(value: str) -> str:
+    return {
+        "identity_boundary_logs": "身份、堡垒机或边界认证日志",
+        "peer_host_internal_auth_pivot": "同环境主机或内网认证记录",
+        "cloud_control_plane_audit": "云侧或容器控制面审计",
+        "boundary_telemetry_for_log_loss": "用于弥补主机日志缺口的边界遥测",
+        "timeline_expansion": "扩展后的时间线证据",
+        "contradiction_resolution": "跨来源矛盾消解结果",
+        "privesc_change_records": "管理员变更记录或软件包回移修复信息",
+    }.get(str(value).strip(), "")
+
+
+def public_scope_gap_summary(payload: dict[str, Any]) -> str:
+    labels: list[str] = []
+    for item in as_list(payload.get("scope_external_pivots")):
+        label = public_scope_pivot_label(str(as_dict(item).get("id", "")))
+        if label and label not in labels:
+            labels.append(label)
+    if labels:
+        return f"Non-host corroboration is still needed from {natural_join(labels[:3])}."
+    return str(payload.get("scope_closure_summary", "")).strip()
+
+
+def public_scope_gap_summary_zh_cn(payload: dict[str, Any]) -> str:
+    labels: list[str] = []
+    for item in as_list(payload.get("scope_external_pivots")):
+        label = public_scope_pivot_label_zh_cn(str(as_dict(item).get("id", "")))
+        if label and label not in labels:
+            labels.append(label)
+    if labels:
+        return f"当前仍需补做主机外或跨主机关联，重点补证 {zh_natural_join(labels[:3])}。"
+    return localize_auto_text_zh_cn(str(payload.get("scope_closure_summary", "")).strip())
+
+
+def public_timeline_gap_summary(payload: dict[str, Any]) -> str:
+    status = str(payload.get("timeline_review_status", "")).strip()
+    if status == "narrow_window":
+        return "The recovered host timeline is narrow and may miss earlier ingress or staging activity."
+    if status == "timeline_not_recovered":
+        return "No reconstructable host timeline was recovered from the current host evidence."
+    if status == "timeline_not_normalized":
+        return "Recovered host timestamps could not yet be normalized into a defensible UTC sequence."
+    if status == "normalized_window_present" and safe_int(payload.get("timeline_span_minutes", 0)):
+        return f"The recovered host timeline currently spans about {payload['timeline_span_minutes']} minute(s)."
+    return str(payload.get("timeline_review_summary", "")).strip()
+
+
+def public_timeline_gap_summary_zh_cn(payload: dict[str, Any]) -> str:
+    status = str(payload.get("timeline_review_status", "")).strip()
+    if status == "narrow_window":
+        return "当前恢复出的主机时间线窗口偏窄，可能遗漏更早期的入口或准备阶段活动。"
+    if status == "timeline_not_recovered":
+        return "当前主机证据尚未恢复出可用于重建的时间线。"
+    if status == "timeline_not_normalized":
+        return "当前恢复到的时间戳还不能形成可辩护的 UTC 序列。"
+    if status == "normalized_window_present" and safe_int(payload.get("timeline_span_minutes", 0)):
+        return f"当前恢复出的主机时间线跨度约为 `{payload['timeline_span_minutes']}` 分钟。"
+    return localize_auto_text_zh_cn(str(payload.get("timeline_review_summary", "")).strip())
+
+
+def leadership_entry_items(payload: dict[str, Any], limit: int = 3) -> list[dict[str, Any]]:
+    items = [as_dict(item) for item in as_list(payload.get("ingress_hypotheses"))]
+    return sorted(items, key=lambda item: confidence_rank(str(item.get("confidence", "unknown"))), reverse=True)[:limit]
+
+
+def leadership_file_entries(payload: dict[str, Any], limit: int = 8) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in [as_dict(x) for x in as_list(payload.get("malware_files"))]:
+        path = str(item.get("path", "") or item.get("origin_path", "")).strip()
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        role = str(item.get("role_inference", "")).strip() or infer_file_role(item)
+        out.append(
             {
-                "claim_type": "observed_fact",
-                "confidence": "medium" if payload["runtime_profile_count"] or posture["gpu_hits"] else "low",
-                "statement": "Runtime-facing indicators were recovered during collection.",
-                "statement_zh": "本轮采集中已恢复出运行时侧指标。",
-                "basis": (
-                    f"runtime_profiles={payload['runtime_profile_count']}, process_ioc_hits={posture['process_hits']}, "
-                    f"network_ioc_hits={posture['network_hits']}, gpu_suspicious={payload['gpu_suspicious']}"
-                ),
-                "basis_zh": (
-                    f"runtime_profiles={payload['runtime_profile_count']}，process_ioc_hits={posture['process_hits']}，"
-                    f"network_ioc_hits={posture['network_hits']}，gpu_suspicious={payload['gpu_suspicious']}"
-                ),
+                "path": path,
+                "sha256": str(item.get("sha256", "")).strip() or "unavailable",
+                "role_inference": role or "unknown",
+                "basis": str(item.get("origin_path", "") or item.get("evidence_id", "unknown")).strip() or "unknown",
             }
         )
+    for item in [as_dict(x) for x in as_list(payload.get("runtime_profiles"))]:
+        path = str(item.get("executable", "")).strip()
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        out.append(
+            {
+                "path": path,
+                "sha256": "unavailable",
+                "role_inference": infer_file_role(
+                    {
+                        "path": path,
+                        "algorithm": item.get("algorithm", ""),
+                        "pool": item.get("pool", ""),
+                    }
+                ),
+                "basis": str(item.get("origin_path", "") or item.get("evidence_id", "runtime_profile")).strip() or "runtime_profile",
+            }
+        )
+    return out[:limit]
+
+
+def extract_ipv4s(text: str) -> list[str]:
+    out: list[str] = []
+    for match in re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", str(text or "")):
+        try:
+            ipaddress.ip_address(match)
+        except ValueError:
+            continue
+        if match not in out:
+            out.append(match)
+    return out
+
+
+def leadership_step_signature(item: dict[str, Any]) -> str:
+    source = str(item.get("source", "")).strip().lower()
+    command = str(item.get("command", "")).strip().lower()
+    excerpt = "\n".join(artifact_excerpt(item, max_lines=8, max_chars=260)).lower()
+    return "\n".join(part for part in [source, command, excerpt] if part)
+
+
+def leadership_step_category(item: dict[str, Any]) -> str:
+    signature = leadership_step_signature(item)
+    if any(token in signature for token in ["failed password", "invalid user", "authentication failure", "auth.log", "secure", "sshd", "lastb", "btmp"]):
+        return "auth"
+    if any(token in signature for token in ["cron", "crontab", "execstart", "systemctl", "authorized_keys", "sudoers", "pam", "preload", "/var/tmp/.crond", "/etc/rc.local"]):
+        return "persistence"
+    if any(token in signature for token in ["ssh -fnd", "frp", "frpc", "frps", "socks", "proxy", "autossh", "ngrok", "chisel"]):
+        return "tunnel"
+    if any(token in signature for token in ["ps aux", "cmdline", "randomx", "stratum", "xmrig", "miner"]) or str(item.get("source", "")).strip().lower() == "process":
+        return "process"
+    return "general"
+
+
+def leadership_step_title(category: str) -> str:
+    return {
+        "auth": "Review Authentication And Brute-Force Traces",
+        "persistence": "Review Persistence Artifacts",
+        "process": "Review Suspicious Processes",
+        "tunnel": "Review Proxy And Tunneling Traces",
+        "general": "Review Additional Host Evidence",
+    }.get(category, "Review Additional Host Evidence")
+
+
+def leadership_step_title_zh_cn(category: str) -> str:
+    return {
+        "auth": "查看认证与爆破痕迹",
+        "persistence": "查看持久化",
+        "process": "查看可疑进程",
+        "tunnel": "查看代理与转发痕迹",
+        "general": "查看补充主机证据",
+    }.get(category, "查看补充主机证据")
+
+
+def leadership_findings_by_evidence(ctx: dict[str, Any], evidence_id: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for item in ctx["findings"]:
+        if evidence_id in [str(x).strip() for x in as_list(item.get("evidence_ids"))]:
+            out.append(as_dict(item))
+    return out
+
+
+def leadership_step_summary(ctx: dict[str, Any], payload: dict[str, Any], item: dict[str, Any], category: str) -> str:
+    scene = ctx["scene_reconstruction"]
+    if category == "auth":
+        counts = as_dict(scene.get("auth_event_counts"))
+        failed = safe_int(counts.get("failed", 0))
+        invalid = safe_int(counts.get("invalid", 0))
+        auth_ips = [str(x) for x in as_list(scene.get("auth_source_ips")) if str(x).strip()]
+        if failed or invalid or auth_ips:
+            return (
+                f"Authentication evidence shows {failed} failed-password event(s), {invalid} invalid-user event(s), "
+                f"and source IP(s) including {shorten_list(auth_ips, limit=4) or '-'}."
+            )
+        return "Authentication evidence is present and should be reviewed for brute-force, reused-credential, or unauthorized-login traces."
+    if category == "persistence":
+        excerpt = " ".join(artifact_excerpt(item, max_lines=2, max_chars=180))
+        if excerpt:
+            return f"Persistence-related host evidence is present, including startup or scheduling content such as: {excerpt}"
+        return "Persistence-related host evidence is present and should be reviewed for startup, cron, or policy abuse."
+    if category == "process":
+        runtime_sentence = leadership_runtime_sentence(payload)
+        if runtime_sentence:
+            return runtime_sentence
+        top_cpu = [as_dict(x) for x in as_list(payload.get("top_cpu"))]
+        if top_cpu:
+            top = top_cpu[0]
+            return (
+                f"High-CPU runtime evidence is visible via pid {top.get('pid', '-')}, executable {top.get('executable', '-')}, "
+                f"and command line {compact_text(str(top.get('command', '') or '-'), max_len=180)}."
+            )
+        return "Process-side evidence is present and should be reviewed for miner or loader behavior."
+    if category == "tunnel":
+        excerpt = " ".join(artifact_excerpt(item, max_lines=2, max_chars=180))
+        if excerpt:
+            return f"Host evidence shows proxy, tunnel, or forwarding behavior such as: {excerpt}"
+        return "Host evidence suggests proxy, tunnel, or remote-forwarding activity that should be treated as suspicious until explained."
+    evidence_id = str(item.get("id", "")).strip()
+    findings = leadership_findings_by_evidence(ctx, evidence_id)
+    if findings:
+        return str(findings[0].get("statement", "")).strip() or "Additional host evidence contributes to the current conclusion."
+    return "Additional host evidence contributes to the current conclusion."
+
+
+def leadership_step_summary_zh_cn(ctx: dict[str, Any], payload: dict[str, Any], item: dict[str, Any], category: str) -> str:
+    scene = ctx["scene_reconstruction"]
+    if category == "auth":
+        counts = as_dict(scene.get("auth_event_counts"))
+        failed = safe_int(counts.get("failed", 0))
+        invalid = safe_int(counts.get("invalid", 0))
+        auth_ips = [str(x) for x in as_list(scene.get("auth_source_ips")) if str(x).strip()]
+        if failed or invalid or auth_ips:
+            return (
+                f"认证类证据显示，当前至少出现失败口令 `{failed}` 次、无效用户 `{invalid}` 次，"
+                f"涉及来源 IP 包括 {zh_natural_join(auth_ips[:4]) or '未恢复'}。"
+            )
+        return "当前已经取得认证类证据，需重点复核是否存在爆破、凭据复用或未授权登录。"
+    if category == "persistence":
+        excerpt = " ".join(artifact_excerpt(item, max_lines=2, max_chars=180))
+        if excerpt:
+            return f"当前已观察到与启动项、计划任务或策略面相关的持久化证据，例如：{excerpt}"
+        return "当前已观察到与启动项、计划任务或策略面相关的持久化证据。"
+    if category == "process":
+        runtime_sentence = leadership_runtime_sentence_zh_cn(payload)
+        if runtime_sentence:
+            return runtime_sentence
+        top_cpu = [as_dict(x) for x in as_list(payload.get("top_cpu"))]
+        if top_cpu:
+            top = top_cpu[0]
+            return (
+                f"当前已见高 CPU 运行时证据，PID `{top.get('pid', '-')}`，可执行路径 `{top.get('executable', '-')}`，"
+                f"命令 `{compact_text(str(top.get('command', '') or '-'), max_len=180)}`。"
+            )
+        return "当前已取得进程侧证据，需重点复核矿工、投放器或加载器行为。"
+    if category == "tunnel":
+        excerpt = " ".join(artifact_excerpt(item, max_lines=2, max_chars=180))
+        if excerpt:
+            return f"当前主机证据显示存在代理、隧道或转发类行为，例如：{excerpt}"
+        return "当前主机证据显示存在代理、隧道或转发类行为。"
+    evidence_id = str(item.get("id", "")).strip()
+    findings = leadership_findings_by_evidence(ctx, evidence_id)
+    if findings:
+        return localize_auto_text_zh_cn(str(findings[0].get("statement", "")).strip()) or "这部分主机证据对当前结论形成了补充支撑。"
+    return "这部分主机证据对当前结论形成了补充支撑。"
+
+
+def leadership_steps(ctx: dict[str, Any], payload: dict[str, Any], limit: int = 4) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    used_categories: set[str] = set()
+    categories_in_order = ["auth", "persistence", "process", "tunnel", "general"]
+    evidence_items = leadership_evidence_items(ctx, payload, limit=max(limit * 2, 6))
+    categorized: dict[str, list[dict[str, Any]]] = {key: [] for key in categories_in_order}
+    for item in evidence_items:
+        category = leadership_step_category(item)
+        categorized.setdefault(category, []).append(item)
+    for category in categories_in_order:
+        items = categorized.get(category) or []
+        if not items or category in used_categories:
+            continue
+        used_categories.add(category)
+        selected.append({"category": category, "item": items[0]})
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def leadership_ip_entries(ctx: dict[str, Any], payload: dict[str, Any]) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def add(ip: str, reason: str, reason_zh: str) -> None:
+        value = str(ip).strip()
+        if not value or value in seen:
+            return
+        seen.add(value)
+        entries.append({"ip": value, "reason": reason, "reason_zh": reason_zh})
+
+    for ip in [str(x) for x in as_list(payload.get("auth_ips"))]:
+        add(ip, "Observed in authentication evidence.", "出现在认证类证据中。")
+    for item in [as_dict(x) for x in as_list(ctx.get("ip_traces"))]:
+        ip = str(item.get("ip", "")).strip()
+        if not ip:
+            continue
+        reason = str(item.get("reason", "")).strip() or "Observed in IP trace records."
+        add(ip, reason, localize_auto_text_zh_cn(reason) or "出现在 IP 溯源记录中。")
+    for profile in [as_dict(x) for x in as_list(payload.get("runtime_profiles"))]:
+        for field in ["pool", "proxy"]:
+            for ip in extract_ipv4s(str(profile.get(field, ""))):
+                add(ip, "Observed in miner runtime pool/proxy parameters.", "出现在矿工运行参数的矿池或代理字段中。")
+    for item in ctx["evidence_items"]:
+        signature = leadership_step_signature(item)
+        reason = ""
+        reason_zh = ""
+        if "ssh -fnd" in signature or "frp" in signature or "proxy" in signature or "socks" in signature:
+            reason = "Observed in proxy or tunnel evidence."
+            reason_zh = "出现在代理或隧道相关证据中。"
+        elif leadership_step_category(item) == "auth":
+            reason = "Observed in authentication evidence."
+            reason_zh = "出现在认证类证据中。"
+        if reason:
+            for ip in extract_ipv4s(str(item.get("command", "")) + "\n" + "\n".join(artifact_excerpt(item, max_lines=8, max_chars=240))):
+                add(ip, reason, reason_zh)
+    return entries
+
+
+def lateral_signal_label_zh_cn(value: str) -> str:
+    return {
+        "active_connection": "当前活动连接",
+        "ssh_toolchain": "SSH 远程操作痕迹",
+        "scp_toolchain": "SCP 传输痕迹",
+        "sftp_toolchain": "SFTP 传输痕迹",
+        "rsync_toolchain": "rsync 传输痕迹",
+        "nc_toolchain": "nc 通信痕迹",
+        "ncat_toolchain": "ncat 通信痕迹",
+        "socat_toolchain": "socat 转发痕迹",
+        "curl_toolchain": "curl 远端下载痕迹",
+        "wget_toolchain": "wget 远端下载痕迹",
+        "autossh_toolchain": "autossh 隧道痕迹",
+        "frp_toolchain": "FRP 隧道痕迹",
+        "frpc_toolchain": "frpc 隧道痕迹",
+        "frps_toolchain": "frps 隧道痕迹",
+        "no_live_connection": "当前未见对应活动连接",
+    }.get(str(value).strip(), str(value).strip() or "未知信号")
+
+
+def render_lateral_review_lines_zh_cn(
+    scene: dict[str, Any],
+    maybe_redact,
+    evidence_refs: Callable[[list[Any]], str] | None = None,
+) -> list[str]:
+    review = as_dict(scene.get("lateral_movement_review"))
+    active_peers = [as_dict(x) for x in as_list(review.get("active_outbound_peers"))]
+    conservative_targets = [as_dict(x) for x in as_list(review.get("conservative_lateral_targets"))]
+    pivot_targets = [as_dict(x) for x in as_list(review.get("external_pivot_required_targets"))]
+
+    lines: list[str] = []
+    if active_peers:
+        lines.append("### 当前活动外联")
+        for item in active_peers:
+            signals = "、".join(lateral_signal_label_zh_cn(x) for x in as_list(item.get("supporting_signals")))
+            text = (
+                f"- `{maybe_redact(str(item.get('ip', 'unknown')))}`"
+                f": 进程=`{maybe_redact(str(item.get('process', '-') or '-'))}`"
+                f" 路径=`{maybe_redact(str(item.get('path', '-') or '-'))}`"
+                f" 远端端口=`{maybe_redact(str(item.get('port', '-') or '-'))}`"
+            )
+            if signals:
+                text += f"；依据={maybe_redact(signals)}"
+            if evidence_refs:
+                text += f"；证据={evidence_refs(as_list(item.get('evidence_ids')))}"
+            lines.append(text)
     else:
-        rows.append(
-            {
-                "claim_type": "observed_fact",
-                "confidence": "low",
-                "statement": "No direct miner runtime IOC was recovered in this pass.",
-                "statement_zh": "本轮未恢复出直接的矿工运行时 IOC。",
-                "basis": (
-                    f"runtime_profiles={payload['runtime_profile_count']}, process_ioc_hits={posture['process_hits']}, "
-                    f"network_ioc_hits={posture['network_hits']}, gpu_suspicious={payload['gpu_suspicious']}"
-                ),
-                "basis_zh": (
-                    f"runtime_profiles={payload['runtime_profile_count']}，process_ioc_hits={posture['process_hits']}，"
-                    f"network_ioc_hits={posture['network_hits']}，gpu_suspicious={payload['gpu_suspicious']}"
-                ),
-            }
+        lines.extend(["### 当前活动外联", "- 本轮未恢复出可明确归入外连方向的活动连接。"])
+
+    if conservative_targets:
+        lines.append("### 保守疑似横向目标")
+        for item in conservative_targets:
+            signals = "、".join(lateral_signal_label_zh_cn(x) for x in as_list(item.get("supporting_signals")))
+            text = (
+                f"- `{maybe_redact(str(item.get('ip', 'unknown')))}`"
+                f": 进程=`{maybe_redact(str(item.get('process', '-') or '-'))}`"
+                f" 路径=`{maybe_redact(str(item.get('path', '-') or '-'))}`"
+                "；结论边界=当前既见活动连接，也见到第二信号，因此只保守标记为疑似横向目标，不直接认定已成功控制对端。"
+            )
+            if signals:
+                text += f"；支撑={maybe_redact(signals)}"
+            if evidence_refs:
+                text += f"；证据={evidence_refs(as_list(item.get('evidence_ids')))}"
+            lines.append(text)
+    else:
+        lines.extend(["### 保守疑似横向目标", "- 当前没有同时满足“活动连接 + 第二信号”的保守疑似横向目标。"])
+
+    if pivot_targets:
+        lines.append("### 仍需外部补证的目标")
+        for item in pivot_targets:
+            signals = "、".join(lateral_signal_label_zh_cn(x) for x in as_list(item.get("supporting_signals")))
+            counters = "、".join(lateral_signal_label_zh_cn(x) for x in as_list(item.get("counter_signals")))
+            text = (
+                f"- `{maybe_redact(str(item.get('ip', 'unknown')))}`"
+                f": 进程=`{maybe_redact(str(item.get('process', '-') or '-'))}`"
+                f" 路径=`{maybe_redact(str(item.get('path', '-') or '-'))}`"
+                "；原因=当前只看到了远程操作工具链痕迹，未同步观察到对应活动连接，需要结合更多主机外证据补证。"
+            )
+            if signals:
+                text += f"；支撑={maybe_redact(signals)}"
+            if counters:
+                text += f"；反证/缺口={maybe_redact(counters)}"
+            if evidence_refs:
+                text += f"；证据={evidence_refs(as_list(item.get('evidence_ids')))}"
+            lines.append(text)
+    else:
+        lines.extend(["### 仍需外部补证的目标", "- 当前没有仅凭工具链痕迹暴露、但仍需额外补证的横向目标。"])
+    return lines
+
+
+def render_hidden_process_review_lines_zh_cn(
+    scene: dict[str, Any],
+    maybe_redact,
+    evidence_refs: Callable[[list[Any]], str] | None = None,
+) -> list[str]:
+    review = as_dict(scene.get("hidden_process_review"))
+    deleted = [as_dict(x) for x in as_list(review.get("deleted_exe_processes"))]
+    suspicions = [as_dict(x) for x in as_list(review.get("hidden_process_suspicions"))]
+    malware_files = [as_dict(x) for x in as_list(scene.get("malware_file_candidates"))]
+
+    lines: list[str] = []
+    if deleted:
+        lines.append("### 已删除但仍在运行的可执行体")
+        for item in deleted:
+            text = (
+                f"- PID=`{maybe_redact(str(item.get('pid', 'unknown')))}`"
+                f" 路径=`{maybe_redact(str(item.get('path', '-') or '-'))}`"
+            )
+            if evidence_refs:
+                text += f"；证据={evidence_refs(as_list(item.get('evidence_ids')))}"
+            lines.append(text)
+    else:
+        lines.extend(["### 已删除但仍在运行的可执行体", "- 本轮未观察到 `/proc/<pid>/exe -> ... (deleted)` 的直接证据。"])
+
+    if suspicions:
+        lines.append("### 隐藏进程与伪装运行体疑点")
+        for item in suspicions:
+            text = (
+                f"- PID=`{maybe_redact(str(item.get('pid', 'unknown')))}`"
+                f" 名称=`{maybe_redact(str(item.get('name', '-') or '-'))}`"
+                f" 路径=`{maybe_redact(str(item.get('path', '-') or '-'))}`"
+                f"；原因={maybe_redact(localize_auto_text_zh_cn(str(item.get('reason', ''))))}"
+            )
+            if evidence_refs:
+                text += f"；证据={evidence_refs(as_list(item.get('evidence_ids')))}"
+            lines.append(text)
+    else:
+        lines.extend(["### 隐藏进程与伪装运行体疑点", "- 当前未形成结构化的隐藏进程疑点条目。"])
+
+    if malware_files:
+        lines.append("### 关联文件哈希")
+        for item in malware_files[:6]:
+            lines.append(
+                f"- 路径=`{maybe_redact(str(item.get('path', '') or item.get('origin_path', '-') or '-'))}`"
+                f" sha256=`{maybe_redact(str(item.get('sha256', '') or '未获取'))}`"
+            )
+    return lines
+
+
+def leadership_evidence_items(ctx: dict[str, Any], payload: dict[str, Any], limit: int = 4) -> list[dict[str, Any]]:
+    evid_idx = ctx["evid_idx"]
+    ordered_ids: list[str] = []
+    for raw in as_list(payload.get("evidence_excerpt_ids")):
+        evid = str(raw).strip()
+        if evid and evid not in ordered_ids:
+            ordered_ids.append(evid)
+    for item in ctx["evidence_items"]:
+        evid = str(item.get("id", "")).strip()
+        if evid and evid not in ordered_ids:
+            ordered_ids.append(evid)
+        if len(ordered_ids) >= limit:
+            break
+    selected: list[dict[str, Any]] = []
+    for evid in ordered_ids[:limit]:
+        item = as_dict(evid_idx.get(evid))
+        if item:
+            selected.append(item)
+    return selected
+
+
+def leadership_evidence_note(item: dict[str, Any]) -> str:
+    source = str(item.get("source", "")).strip().lower()
+    if source == "process":
+        return "Process-side evidence showing the executable path or command line that was actually captured during collection."
+    if source == "auth":
+        return "Authentication-side evidence showing login activity preserved in host logs or fallback auth artifacts."
+    if source in {"network", "socket"}:
+        return "Network-side evidence showing host exposure or remote communication that was directly observed."
+    if source in {"file", "filesystem"}:
+        return "File-side evidence showing a path or artifact that should be reviewed together with its hash and origin."
+    return "Direct excerpt preserved from the collected artifact so the conclusion can be traced back to raw host evidence."
+
+
+def leadership_evidence_note_zh_cn(item: dict[str, Any]) -> str:
+    source = str(item.get("source", "")).strip().lower()
+    if source == "process":
+        return "这是进程侧证据，用来说明采集当时主机上实际看到的可执行路径或命令行参数。"
+    if source == "auth":
+        return "这是认证侧证据，用来说明主机日志或替代认证产物里实际记录到的登录行为。"
+    if source in {"network", "socket"}:
+        return "这是网络侧证据，用来说明主机暴露面或实际观察到的远程通信。"
+    if source in {"file", "filesystem"}:
+        return "这是文件侧证据，用来说明需要结合路径、来源和哈希一起复核的可疑产物。"
+    return "这是直接保留的原始证据摘录，便于把报告结论回溯到主机侧原始事实。"
+
+
+def leadership_file_role_label(value: str) -> str:
+    return {
+        "miner_runtime": "miner runtime",
+        "launcher_or_dropper": "launcher / dropper",
+        "candidate_binary": "suspicious binary candidate",
+        "unknown": "unknown",
+    }.get(str(value).strip(), str(value).strip() or "unknown")
+
+
+def leadership_file_role_label_zh_cn(value: str) -> str:
+    return {
+        "miner_runtime": "矿工运行体",
+        "launcher_or_dropper": "投放器或启动器",
+        "candidate_binary": "可疑二进制候选",
+        "unknown": "未知",
+    }.get(str(value).strip(), str(value).strip() or "未知")
+
+
+def leadership_source_label_zh_cn(value: str) -> str:
+    return {
+        "process": "进程",
+        "auth": "认证",
+        "network": "网络",
+        "socket": "套接字",
+        "file": "文件",
+        "filesystem": "文件系统",
+        "unknown": "未知",
+    }.get(str(value).strip().lower(), str(value).strip() or "未知")
+
+
+def leadership_runtime_sentence(payload: dict[str, Any]) -> str:
+    profiles = [as_dict(item) for item in as_list(payload.get("runtime_profiles"))]
+    if not profiles:
+        return ""
+    item = profiles[0]
+    return (
+        f"The clearest runtime indicator is `{str(item.get('executable', '') or '-')}` using algorithm "
+        f"`{str(item.get('algorithm', '') or '-')}`, pool `{str(item.get('pool', '') or '-')}`, wallet "
+        f"`{str(item.get('wallet', '') or '-')}`, and `{str(item.get('cpu_threads', '') or '-')}` CPU thread(s)."
+    )
+
+
+def leadership_runtime_sentence_zh_cn(payload: dict[str, Any]) -> str:
+    profiles = [as_dict(item) for item in as_list(payload.get("runtime_profiles"))]
+    if not profiles:
+        return ""
+    item = profiles[0]
+    return (
+        f"当前最清晰的运行时线索是 `{str(item.get('executable', '') or '-')}`，算法 "
+        f"`{str(item.get('algorithm', '') or '-')}`，矿池 `{str(item.get('pool', '') or '-')}`，钱包 "
+        f"`{str(item.get('wallet', '') or '-')}`，CPU 线程 `{str(item.get('cpu_threads', '') or '-')}`。"
+    )
+
+
+def leadership_log_status_summary(payload: dict[str, Any]) -> str:
+    if safe_int(payload.get("log_risk_count", 0)) <= 0:
+        return "No distro-applicable primary-log gap is visible in current host evidence."
+    if str(payload.get("log_layout_status", "")).strip() == "reduced_visibility_on_expected_logs":
+        adjusted = safe_int(payload.get("log_layout_adjusted_count", 0)) or safe_int(payload.get("log_risk_count", 0))
+        return (
+            f"Applicable host logs still show {adjusted} missing or suspicious item(s); attribution confidence should be reduced."
         )
-    rows.append(
-        {
-            "claim_type": "observed_fact",
-            "confidence": "medium" if payload["gpu_suspicious"] else "low",
-            "statement": "GPU visibility was evaluated through multiple read-only probe paths.",
-            "statement_zh": "GPU 已通过多条只读探针路径进行可见性评估。",
-            "basis": payload["gpu_visibility_summary"],
-            "basis_zh": gpu_summary_zh,
-        }
-    )
-    if payload["ingress_hypotheses"]:
-        first = payload["ingress_hypotheses"][0]
-        rows.append(
-            {
-                "claim_type": "inference",
-                "confidence": str(first.get("confidence", "low")),
-                "statement": str(first.get("label", "Initial-access path remains inconclusive.")),
-                "statement_zh": str(first.get("label_zh", "当前入侵入口仍待进一步确认。")),
-                "basis": str(first.get("basis", "-")),
-                "basis_zh": str(first.get("basis", "-")),
-            }
+    summary = str(payload.get("log_layout_summary", "")).strip()
+    if summary:
+        return summary
+    return f"{payload.get('log_risk_count', 0)} primary-log artifact(s) remain missing, suspicious, or tampered in current visibility."
+
+
+def leadership_log_status_summary_zh_cn(payload: dict[str, Any]) -> str:
+    if safe_int(payload.get("log_risk_count", 0)) <= 0:
+        return "当前主机证据里未见适用主日志存在明确缺口。"
+    if str(payload.get("log_layout_status", "")).strip() == "reduced_visibility_on_expected_logs":
+        adjusted = safe_int(payload.get("log_layout_adjusted_count", 0)) or safe_int(payload.get("log_risk_count", 0))
+        return f"适用主日志仍有 `{adjusted}` 项缺失或可疑，攻击链归因置信度应相应下调。"
+    summary = str(payload.get("log_layout_summary", "")).strip()
+    if summary:
+        return localize_auto_text_zh_cn(summary)
+    return f"当前仍有 `{payload.get('log_risk_count', 0)}` 项主日志产物缺失、可疑或疑似被篡改。"
+
+
+def leadership_conclusion_paragraph(ctx: dict[str, Any], payload: dict[str, Any], posture: dict[str, Any]) -> str:
+    if collection_failed(ctx):
+        reason = str(payload.get("collection_failure_reason", "unknown") or "unknown").rstrip(".")
+        return (
+            "Based on the current host-side read-only evidence, no compromise conclusion can be made because "
+            "collection failed before host-side evidence could be gathered. "
+            f"The current blocker is {reason}. "
+            "This bundle should be treated as an evidence-preserving failure record until read-only collection succeeds."
         )
-    rows.append(
-        {
-            "claim_type": "inference",
-            "confidence": "medium" if payload["lateral_status"] == "possible" else "low",
-            "statement": (
-                "Lateral movement remains possible and needs broader pivot review."
-                if payload["lateral_status"] == "possible"
-                else "No direct host-side lateral movement indicator was observed in current visibility."
-            ),
-            "statement_zh": (
-                "横向移动仍存在可能，需要继续扩展支点复核。"
-                if payload["lateral_status"] == "possible"
-                else "当前可见性范围内，未直接观察到主机侧横向移动指标。"
-            ),
-            "basis": payload["lateral_basis"],
-            "basis_zh": localize_auto_text_zh_cn(payload["lateral_basis"]),
-        }
-    )
-    rows.append(
-        {
-            "claim_type": "attribution",
-            "confidence": "low",
-            "statement": "Current host-only evidence does not establish actor attribution.",
-            "statement_zh": "仅凭当前主机侧证据，尚不足以建立攻击者归因。",
-            "basis": (
-                f"traced={trace_counts.get('traced', 0)}, untraceable={trace_counts.get('untraceable', 0)}, "
-                f"unknown={trace_counts.get('unknown', 0)}, log_risk_count={payload['log_risk_count']}"
-            ),
-            "basis_zh": (
-                f"traced={trace_counts.get('traced', 0)}，untraceable={trace_counts.get('untraceable', 0)}，"
-                f"unknown={trace_counts.get('unknown', 0)}，log_risk_count={payload['log_risk_count']}"
-            ),
-        }
-    )
-    return rows
+    parts = [
+        f"Based on the current host-side read-only evidence, the current case picture is as follows: {posture['verdict']}",
+    ]
+    runtime_sentence = leadership_runtime_sentence(payload)
+    if runtime_sentence:
+        parts.append(runtime_sentence)
+    entry_items = leadership_entry_items(payload, limit=1)
+    if entry_items:
+        parts.append(f"The leading entry-path hypothesis is: {str(entry_items[0].get('label', '')).strip()}")
+    parts.append("Current host-only evidence still does not establish actor attribution.")
+    scope_gap = public_scope_gap_summary(payload)
+    if scope_gap:
+        parts.append(scope_gap)
+    return " ".join(part for part in parts if part)
+
+
+def leadership_conclusion_paragraph_zh_cn(ctx: dict[str, Any], payload: dict[str, Any], posture: dict[str, Any]) -> str:
+    if collection_failed(ctx):
+        reason = localize_auto_text_zh_cn(str(payload.get("collection_failure_reason", "unknown") or "unknown")).rstrip("。")
+        return (
+            "基于当前主机侧只读证据，目前无法输出是否被入侵的结论，因为主机侧证据在建立前采集就已经失败。"
+            f"当前阻塞点是：{reason}。"
+            "在只读采集重新成功前，这个案件包只能作为失败留痕，不能外推出入侵事实。"
+        )
+    parts = [
+        f"基于当前主机侧只读证据，当前案件图景如下：{localize_auto_text_zh_cn(posture['verdict'])}",
+    ]
+    runtime_sentence = leadership_runtime_sentence_zh_cn(payload)
+    if runtime_sentence:
+        parts.append(runtime_sentence)
+    entry_items = leadership_entry_items(payload, limit=1)
+    if entry_items:
+        parts.append(f"现阶段最优先的进入路径假设是：{str(entry_items[0].get('label_zh', '')).strip()}")
+    parts.append("但仅凭当前主机侧证据，仍无法完成攻击者归因。")
+    scope_gap = public_scope_gap_summary_zh_cn(payload)
+    if scope_gap:
+        parts.append(scope_gap)
+    return "".join(part if part.endswith(("。", "！", "？")) else f"{part}" for part in parts)
 
 
 def build_leadership_report(data: dict[str, Any], redact: bool, case_dir: str | None = None) -> str:
     ctx = prepare_report_context(data, redact=redact, strict=False, case_dir=case_dir)
     payload = leadership_payload(ctx)
-    matrix_rows = leadership_matrix_rows(ctx, payload)
     posture = investigation_posture_payload(ctx)
 
     def maybe_redact(value: str) -> str:
         return sanitize_report_text(value, redact)
 
+    case_id = leadership_case_id(data, ctx)
     lines = [
         f"# {ctx['title']} - Leadership Review Report",
         "",
-        "This standalone report is intended for management review. It is self-contained and does not require jumping across other files.",
+        "## Conclusion",
+        maybe_redact(leadership_conclusion_paragraph(ctx, payload, posture)),
         "",
-        "## 🚨 Final Summary",
-        f"- **Case ID:** `{data.get('case_id', 'unknown')}`",
+        f"- **Case ID:** `{maybe_redact(case_id)}`",
         f"- **Host:** `{maybe_redact(ctx['host_name'])}` (`{maybe_redact(ctx['host_ip'])}`)",
         f"- **OS:** `{maybe_redact(ctx['os_name'])}`",
         f"- **Observation Window (UTC):** `{ctx['window_start']}` -> `{ctx['window_end']}`",
         f"- **Earliest Relevant Time:** `{maybe_redact(payload['intrusion_window'])}`",
-        f"- **Conclusion:** {maybe_redact(posture['verdict'])}",
-        f"- **Boundary:** {maybe_redact(posture['boundary'])}",
-        f"- **Immediate Focus:** {maybe_redact(posture['focus'])}",
+        "- **Read-Only Scope:** `0` state-changing actions were executed during this collection.",
         "",
     ]
     if ctx["collection_failed"]:
         lines.extend(
             [
-                "## ⚠️ Collection Failure",
+                "## Collection Failure",
+                "- Collection failed before host-side evidence could be gathered.",
                 f"- **Phase:** `{maybe_redact(payload['collection_failure_phase'] or 'unknown')}`",
                 f"- **Reason:** {maybe_redact(payload['collection_failure_reason'] or '-')}",
                 f"- **Retry Guidance:** {maybe_redact(payload['collection_retry_guidance'] or '-')}",
                 "",
             ]
         )
-    lines.append("## 🧩 Conclusion Matrix")
-    for row in matrix_rows:
-        lines.extend(
-            [
-                f"### {claim_type_emoji(row['claim_type'])} {claim_type_label(row['claim_type'])} | {confidence_emoji(row['confidence'])} {row['confidence']}",
-                f"- **Statement:** {maybe_redact(row['statement'])}",
-                f"- **Basis:** {maybe_redact(row['basis'])}",
-                "",
-            ]
-        )
-    lines.append("## 🧭 Suspected Initial Access")
-    for item in payload["ingress_hypotheses"]:
-        lines.append(
-            f"- `{item['confidence']}` {maybe_redact(item['label'])} | basis: {maybe_redact(item['basis'])}"
-        )
-    lines.extend(
-        [
-            "",
-            "## 🔬 What Was Observed After Access",
-        ]
-    )
-    for item in payload["activity_summary"]:
-        lines.append(f"- {maybe_redact(item)}")
-    lines.extend(
-        [
-            "",
-            "## ⛏️ Mining / Malware Details",
-            f"- **Parsed Miner Runtime Profiles:** `{payload['runtime_profile_count']}`",
-            f"- **Top-CPU Miner-Keyword Hits:** `{payload['top_cpu_keyword_hits']}`",
-            f"- **GPU Suspicious Process Count:** `{payload['gpu_suspicious']}`",
-            f"- **GPU Peak Utilization:** `{payload['gpu_peak']}%`",
-            f"- **GPU Visibility Status:** `{maybe_redact(payload['gpu_visibility_status'])}`",
-            f"- **GPU Vendor Hints:** `{maybe_redact(', '.join(payload['gpu_vendor_hints']) or 'none')}`",
-            f"- **GPU Fallback Markers:** `{maybe_redact(', '.join(payload['gpu_fallback_markers']) or 'none')}`",
-        ]
-    )
-    if payload["runtime_profiles"]:
-        for item in payload["runtime_profiles"][:4]:
-            lines.append(
-                f"- runtime: exe=`{maybe_redact(str(item.get('executable', '') or '-'))}`, algo=`{maybe_redact(str(item.get('algorithm', '') or '-'))}`, pool=`{maybe_redact(str(item.get('pool', '') or '-'))}`, proxy=`{maybe_redact(str(item.get('proxy', '') or '-'))}`, wallet=`{maybe_redact(str(item.get('wallet', '') or '-'))}`, password=`{maybe_redact(str(item.get('password', '') or '-'))}`, cpu_threads=`{maybe_redact(str(item.get('cpu_threads', '') or '-'))}`"
+    if not ctx["collection_failed"]:
+        lines.extend(["## How The Conclusion Was Reached", ""])
+        steps = leadership_steps(ctx, payload, limit=4)
+        for index, step in enumerate(steps, start=1):
+            item = as_dict(step.get("item"))
+            category = str(step.get("category", "general"))
+            lines.extend(
+                [
+                    f"### Step {index}. {leadership_step_title(category)}",
+                    maybe_redact(leadership_step_summary(ctx, payload, item, category)),
+                    "",
+                    "```bash",
+                    maybe_redact(str(item.get("command", "")).strip() or "# command unavailable"),
+                    "```",
+                    "",
+                    "```text",
+                ]
             )
-    else:
-        lines.append("- No parseable miner runtime profile was recovered in this pass.")
-
-    lines.extend(["", "## 📦 Files And Hashes"])
-    if payload["malware_files"]:
-        for item in payload["malware_files"][:8]:
-            lines.append(
-                f"- file=`{maybe_redact(str(item.get('path', '') or '-'))}` | sha256=`{maybe_redact(str(item.get('sha256', '') or 'unavailable'))}` | role_inference=`{maybe_redact(str(item.get('role_inference', 'unknown')) or 'unknown')}` | basis=`{maybe_redact(str(item.get('origin_path', '') or str(item.get('evidence_id', 'unknown'))))}`"
-            )
-    else:
-        lines.append("- No suspicious executable file/hash pair was recovered in current visibility.")
-
-    lines.extend(
-        [
-            "",
-            "## 🖥️ System State And Exposure",
-            f"- **Service Exposure:** {maybe_redact(payload['service_exposure'])}",
-            f"- **Authentication Source IPs:** {maybe_redact(', '.join(payload['auth_ips']) if payload['auth_ips'] else 'none recovered')}",
-            f"- **Listening Ports:** {maybe_redact(', '.join(payload['listening_ports']) if payload['listening_ports'] else 'none recovered')}",
-        ]
-    )
-    if payload["top_cpu"]:
-        lines.append("- **Current Top CPU Processes:**")
-        for item in payload["top_cpu"][:5]:
-            lines.append(
-                f"  - pid=`{maybe_redact(str(item.get('pid', '') or '-'))}` cpu=`{maybe_redact(str(item.get('cpu_percent', '') or '-'))}` exe=`{maybe_redact(str(item.get('executable', '') or '-'))}` cmd=`{maybe_redact(compact_text(str(item.get('command', '') or '-'), max_len=160))}`"
-            )
-
-    lines.extend(
-        [
-            "",
-            "## 🔁 Lateral Movement Assessment",
-            f"- **Status:** `{payload['lateral_status']}`",
-            f"- **Assessment:** {maybe_redact(payload['lateral_basis'])}",
-            "",
-            "## 🧾 Log Integrity",
-            f"- **Risk Count:** `{payload['log_risk_count']}`",
-            "- Missing or tampered logs reduce attribution confidence and require external telemetry correlation.",
-        ]
-    )
-    if payload["log_layout_summary"]:
-        lines.append(f"- **Second-Pass Review:** {maybe_redact(payload['log_layout_summary'])}")
-    lines.extend(
-        [
-            "",
-            "## 🧪 Second-Pass Review",
-            f"- **Workflow Status:** `{workflow_review_status_label(payload['workflow_review_status'])}`",
-            f"- **Closure Posture:** `{'host_only_report_ready' if payload['workflow_closure_ready'] else 'open_gaps_visible'}`",
-            f"- **Timeline Review:** `{timeline_review_label(payload['timeline_review_status'])}` | normalized_events=`{payload['timeline_normalized_event_count']}` | span_minutes=`{payload['timeline_span_minutes']}`",
-            f"- **Scope Closure:** `{scope_closure_label(payload['scope_closure_status'])}`",
-        ]
-    )
-    if payload["workflow_review_summary"]:
-        lines.append(f"- **Second-Pass Summary:** {maybe_redact(payload['workflow_review_summary'])}")
-    if payload["timeline_review_summary"]:
-        lines.append(f"- **Timeline Note:** {maybe_redact(payload['timeline_review_summary'])}")
-    if payload["scope_closure_summary"]:
-        lines.append(f"- **Scope Note:** {maybe_redact(payload['scope_closure_summary'])}")
-    if payload["scope_external_pivots"]:
-        lines.append("- **Required External Or Cross-Host Pivots:**")
-        for item in payload["scope_external_pivots"]:
-            pivot_id = str(item.get("id", "")).strip()
-            reason = str(item.get("reason", "")).strip()
-            lines.append(f"  - `{second_pass_pivot_label(pivot_id)}`: {maybe_redact(reason or '-')}")
-    if payload["workflow_closure_notes"]:
-        lines.append("- **Closure Notes:**")
-        for item in payload["workflow_closure_notes"]:
-            lines.append(f"  - {maybe_redact(item)}")
-    lines.extend(["", "## 🔗 Evidence Excerpts"])
-    evid_idx = ctx["evid_idx"]
-    if payload["evidence_excerpt_ids"]:
-        for evid in payload["evidence_excerpt_ids"]:
-            item = as_dict(evid_idx.get(evid))
-            if not item:
-                continue
-            excerpt = artifact_excerpt(item, max_lines=2)
-            lines.append(f"- **{evid}** source=`{maybe_redact(str(item.get('source', 'unknown')) or 'unknown')}` command=`{maybe_redact(compact_text(str(item.get('command', '') or '-'), max_len=120))}`")
+            excerpt = artifact_excerpt(item, max_lines=8, max_chars=260)
             if excerpt:
-                for part in excerpt:
-                    lines.append(f"  - {maybe_redact(part)}")
+                lines.extend(maybe_redact(part) for part in excerpt)
+            else:
+                lines.append("artifact excerpt unavailable")
+            lines.extend(["```", ""])
+
+        lines.extend(["## Affected IPs"])
+        ip_entries = leadership_ip_entries(ctx, payload)
+        if ip_entries:
+            for item in ip_entries:
+                lines.append(
+                    f"- `{maybe_redact(item['ip'])}`: {maybe_redact(item['reason'])}"
+                )
+        else:
+            lines.append("- No additional affected or related IP was recovered in current host visibility.")
+        lines.append("")
+
+    lines.append("## Suspicious Files And Hashes")
+    file_entries = leadership_file_entries(payload, limit=8)
+    if file_entries:
+        for item in file_entries:
+            lines.append(
+                f"- Path=`{maybe_redact(str(item.get('path', '') or '-'))}` | sha256=`{maybe_redact(str(item.get('sha256', '') or 'unavailable'))}` "
+                f"| likely role=`{maybe_redact(leadership_file_role_label(str(item.get('role_inference', 'unknown'))))}` "
+                f"| basis=`{maybe_redact(str(item.get('basis', '') or 'unknown'))}`"
+            )
     else:
-        lines.append("- No evidence excerpt was selected for this pass.")
+        lines.append("- No suspicious path/hash pair was recovered in current visibility.")
 
     lines.extend(
         [
             "",
-            "## ✅ Recommended Response Plan",
-            "1. Preserve the current host state. Do not kill processes, delete files, or restart services before approval.",
-            "2. If the host is business-critical, isolate network egress through change-controlled controls rather than destructive host actions.",
-            "3. Collect external evidence next: bastion/VPN/IdP logs, firewall/NAT/DNS records, cloud audit trails, and Kubernetes audit logs if applicable.",
-            "4. Revoke or rotate exposed credentials, keys, and tokens that could plausibly explain the initial-access path.",
-            "5. Review each suspicious executable path and hash against threat-intel, package ownership, and known-good baselines before remediation.",
-            "6. If mining runtime is confirmed, prepare a rollback-safe containment plan covering process stop, persistence cleanup, credential hygiene, and service recovery validation.",
-            "7. If lateral movement remains possible, expand review to peer hosts, bastions, management nodes, and internal source IP pivots named in this report.",
+            "## Recommended Response",
+            "1. Preserve the current host state and keep the workflow read-only until a separate change approval is granted.",
+            "2. If the host is business-critical, prefer rollback-safe network controls over destructive on-host actions.",
+            "3. Collect non-host corroboration next: bastion, VPN, identity-provider, firewall, DNS, cloud, and container audit records as applicable.",
+            "4. Review every suspicious path and hash against threat intelligence, package ownership, and known-good baselines before remediation.",
+            "5. Rotate or revoke the credentials, keys, and tokens that could plausibly explain the suspected entry path.",
             "",
-            "## ℹ️ Operator Notes",
-            "- This report separates observed facts from inference and does not fabricate missing steps.",
-            "- Any state-changing action still requires explicit approval and business-impact review.",
-            "",
+            "## Remaining Uncertainties",
+            "- Actor attribution remains unproven from host-only evidence.",
         ]
     )
+    if not ctx["collection_failed"]:
+        entry_items = leadership_entry_items(payload, limit=1)
+        if entry_items:
+            lines.append(f"- Leading entry-path hypothesis: {maybe_redact(str(entry_items[0].get('label', '')).strip())}")
+        lines.append(f"- {maybe_redact(leadership_log_status_summary(payload))}")
+    timeline_gap = public_timeline_gap_summary(payload)
+    if timeline_gap:
+        lines.append(f"- {maybe_redact(timeline_gap)}")
+    scope_gap = public_scope_gap_summary(payload)
+    if scope_gap:
+        lines.append(f"- {maybe_redact(scope_gap)}")
+    if safe_int(payload.get("log_risk_count", 0)) > 0:
+        lines.append(f"- {maybe_redact(leadership_log_status_summary(payload))}")
     return "\n".join(lines).strip() + "\n"
 
 
 def build_leadership_report_zh_cn(data: dict[str, Any], redact: bool, case_dir: str | None = None) -> str:
     ctx = prepare_report_context(data, redact=redact, strict=False, case_dir=case_dir)
     payload = leadership_payload(ctx)
-    matrix_rows = leadership_matrix_rows(ctx, payload)
+    posture = investigation_posture_payload(ctx)
 
     def maybe_redact(value: str) -> str:
         return zh_report_text(value, redact)
 
-    posture = investigation_posture_payload(ctx)
-    gpu_status_zh = {
-        "suspicious_runtime": "已见可疑运行时",
-        "active_no_direct_miner_match": "存在活动但未直接命中矿工",
-        "hardware_visible_no_runtime": "硬件可见但未见运行时",
-        "tooling_limited": "工具受限",
-        "not_observed": "未观察到",
-        "unknown": "未知",
-    }.get(payload["gpu_visibility_status"], payload["gpu_visibility_status"])
+    case_id = leadership_case_id(data, ctx)
     lines = [
         f"# {ctx['title']} - 领导复核报告",
         "",
-        "这是一份可单独提交的案件汇总件，不依赖其它文件跳转即可了解整体情况。",
+        "## 结论",
+        maybe_redact(leadership_conclusion_paragraph_zh_cn(ctx, payload, posture)),
         "",
-        "## 🚨 最终结论",
-        f"- **案件 ID：** `{data.get('case_id', 'unknown')}`",
+        f"- **案件 ID：** `{sanitize_report_text(case_id, redact)}`",
         f"- **主机：** `{sanitize_report_text(ctx['host_name'], redact)}` (`{sanitize_report_text(ctx['host_ip'], redact)}`)",
         f"- **操作系统：** `{zh_report_text(ctx['os_name'], redact)}`",
         f"- **观察窗口（UTC）：** `{ctx['window_start']}` -> `{ctx['window_end']}`",
         f"- **最早相关时间：** `{sanitize_report_text(payload['intrusion_window'], redact)}`",
-        f"- **结论：** {maybe_redact(localize_auto_text_zh_cn(posture['verdict']))}",
-        f"- **判断边界：** {maybe_redact(localize_auto_text_zh_cn(posture['boundary']))}",
-        f"- **当前重点：** {maybe_redact(localize_auto_text_zh_cn(posture['focus']))}",
+        "- **只读约束：** 本次采集未执行任何状态变更命令。",
         "",
     ]
     if ctx["collection_failed"]:
         lines.extend(
             [
-                "## ⚠️ 采集失败说明",
+                "## 采集失败说明",
                 f"- **失败阶段：** `{sanitize_report_text(payload['collection_failure_phase'] or 'unknown', redact)}`",
-                f"- **失败原因：** {maybe_redact(payload['collection_failure_reason'] or '-')}",
-                f"- **重试建议：** {maybe_redact(payload['collection_retry_guidance'] or '-')}",
+                f"- **失败原因：** {maybe_redact(str(payload.get('collection_failure_reason', '-') or '-'))}",
+                f"- **重试建议：** {maybe_redact(str(payload.get('collection_retry_guidance', '-') or '-'))}",
                 "",
             ]
         )
-    lines.append("## 🧩 结论矩阵")
-    for row in matrix_rows:
-        claim_zh = {
-            "observed_fact": "观测事实",
-            "inference": "推断",
-            "attribution": "归因",
-        }.get(row["claim_type"], row["claim_type"])
-        conf_zh = {
-            "high": "高",
-            "medium": "中",
-            "low": "低",
-            "unknown": "未知",
-        }.get(row["confidence"], row["confidence"])
-        lines.extend(
-            [
-                f"### {claim_type_emoji(row['claim_type'])} {claim_zh} | {confidence_emoji(row['confidence'])} {conf_zh}",
-                f"- **表述：** {maybe_redact(row['statement_zh'])}",
-                f"- **依据：** {maybe_redact(str(row.get('basis_zh', localize_auto_text_zh_cn(row['basis']))))}",
-                "",
-            ]
-        )
-    lines.append("## 🧭 疑似入侵方式")
-    for item in payload["ingress_hypotheses"]:
-        conf = {"high": "高", "medium": "中", "low": "低"}.get(item["confidence"], item["confidence"])
-        lines.append(f"- `置信度 {conf}` {maybe_redact(item['label_zh'])} | 依据：{maybe_redact(item['basis'])}")
-    lines.extend(["", "## 🔬 入侵后做了什么"])
-    for item in payload["activity_summary"]:
-        lines.append(f"- {maybe_redact(localize_auto_text_zh_cn(item))}")
-    lines.extend(
-        [
-            "",
-            "## ⛏️ 挖矿 / 木马信息",
-            f"- **运行参数画像数量：** `{payload['runtime_profile_count']}`",
-            f"- **高 CPU 进程矿工关键字命中数：** `{payload['top_cpu_keyword_hits']}`",
-            f"- **GPU 可疑进程数量：** `{payload['gpu_suspicious']}`",
-            f"- **GPU 峰值利用率：** `{payload['gpu_peak']}%`",
-            f"- **GPU 可见性状态：** `{maybe_redact(gpu_status_zh)}`",
-            f"- **GPU 厂商提示：** `{maybe_redact('、'.join(payload['gpu_vendor_hints']) or '无')}`",
-            f"- **GPU 降级标记：** `{maybe_redact('、'.join(payload['gpu_fallback_markers']) or '无')}`",
-        ]
-    )
-    if payload["runtime_profiles"]:
-        for item in payload["runtime_profiles"][:4]:
-            lines.append(
-                f"- 运行参数：exe=`{sanitize_report_text(str(item.get('executable', '') or '-'), redact)}`，algo=`{sanitize_report_text(str(item.get('algorithm', '') or '-'), redact)}`，pool=`{sanitize_report_text(str(item.get('pool', '') or '-'), redact)}`，proxy=`{sanitize_report_text(str(item.get('proxy', '') or '-'), redact)}`，wallet=`{sanitize_report_text(str(item.get('wallet', '') or '-'), redact)}`，password=`{sanitize_report_text(str(item.get('password', '') or '-'), redact)}`，cpu_threads=`{sanitize_report_text(str(item.get('cpu_threads', '') or '-'), redact)}`"
+    if not ctx["collection_failed"]:
+        lines.extend(["## 发现过程", ""])
+        steps = leadership_steps(ctx, payload, limit=4)
+        for index, step in enumerate(steps, start=1):
+            item = as_dict(step.get("item"))
+            category = str(step.get("category", "general"))
+            lines.extend(
+                [
+                    f"### 步骤 {index}：{leadership_step_title_zh_cn(category)}",
+                    sanitize_report_text(leadership_step_summary_zh_cn(ctx, payload, item, category), redact),
+                    "",
+                    "```bash",
+                    sanitize_report_text(str(item.get("command", "")).strip() or "# command unavailable", redact),
+                    "```",
+                    "",
+                    "```text",
+                ]
             )
-    else:
-        lines.append("- 当前未恢复出可直接解析的矿工运行参数画像。")
-
-    lines.extend(["", "## 📦 可疑文件与哈希"])
-    if payload["malware_files"]:
-        for item in payload["malware_files"][:8]:
-            role_label = {
-                "miner_runtime": "矿工运行体",
-                "launcher_or_dropper": "投放器/启动器",
-                "candidate_binary": "可疑二进制候选",
-                "unknown": "未知",
-            }.get(str(item.get("role_inference", "unknown")), str(item.get("role_inference", "unknown")))
-            lines.append(
-                f"- 文件=`{sanitize_report_text(str(item.get('path', '') or '-'), redact)}` | sha256=`{sanitize_report_text(str(item.get('sha256', '') or 'unavailable'), redact)}` | 作用判断=`{role_label}` | 依据=`{sanitize_report_text(str(item.get('origin_path', '') or str(item.get('evidence_id', 'unknown'))), redact)}`"
-            )
-    else:
-        lines.append("- 当前视野内未恢复出可疑文件与哈希配对结果。")
-
-    lines.extend(
-        [
-            "",
-            "## 🖥️ 系统状态与暴露面",
-            f"- **服务暴露面：** {maybe_redact(localize_auto_text_zh_cn(payload['service_exposure']))}",
-            f"- **认证来源 IP：** {sanitize_report_text(', '.join(payload['auth_ips']) if payload['auth_ips'] else '未恢复', redact)}",
-            f"- **监听端口：** {sanitize_report_text(', '.join(payload['listening_ports']) if payload['listening_ports'] else '未恢复', redact)}",
-        ]
-    )
-    if payload["top_cpu"]:
-        lines.append("- **当前高 CPU 进程：**")
-        for item in payload["top_cpu"][:5]:
-            lines.append(
-                f"  - pid=`{sanitize_report_text(str(item.get('pid', '') or '-'), redact)}` cpu=`{sanitize_report_text(str(item.get('cpu_percent', '') or '-'), redact)}` exe=`{sanitize_report_text(str(item.get('executable', '') or '-'), redact)}` cmd=`{sanitize_report_text(compact_text(str(item.get('command', '') or '-'), max_len=160), redact)}`"
-            )
-
-    lateral_label = {"possible": "存在可能", "not_observed": "未直接观察到", "observed": "已观察到"}.get(payload["lateral_status"], payload["lateral_status"])
-    lines.extend(
-        [
-            "",
-            "## 🔁 横向渗透判断",
-            f"- **状态：** `{lateral_label}`",
-            f"- **说明：** {maybe_redact(localize_auto_text_zh_cn(payload['lateral_basis']))}",
-            "",
-            "## 🧾 日志完整性",
-            f"- **风险数量：** `{payload['log_risk_count']}`",
-            "- 关键日志缺失或可疑时，攻击链归因置信度必须下调，并补拉外部遥测。",
-        ]
-    )
-    if payload["log_layout_summary"]:
-        if payload["log_layout_status"] == "distro_layout_consistent":
-            lines.append(
-                f"- **二轮复核：** 已按 `{payload['log_layout_os_family'] or 'unknown'}` 发行版布局完成校正；不适用的日志路径已从风险统计中剔除。"
-            )
-        elif payload["log_layout_status"] == "reduced_visibility_on_expected_logs":
-            lines.append(
-                f"- **二轮复核：** 适用主日志仍有 `{payload['log_layout_adjusted_count']}` 项风险，关键日志缺口在复核后依然成立。"
-            )
-        else:
-            lines.append(f"- **二轮复核：** {maybe_redact(localize_auto_text_zh_cn(payload['log_layout_summary']))}")
-    lines.extend(
-        [
-            "",
-            "## 🧪 二轮复核",
-            f"- **工作流状态：** `{workflow_review_status_label_zh_cn(payload['workflow_review_status'])}`",
-            f"- **闭环姿态：** `{'当前主机侧报告可闭环' if payload['workflow_closure_ready'] else '仍有未闭环缺口'}`",
-            f"- **时间线复核：** `{timeline_review_label_zh_cn(payload['timeline_review_status'])}` | normalized_events=`{payload['timeline_normalized_event_count']}` | span_minutes=`{payload['timeline_span_minutes']}`",
-            f"- **范围闭环：** `{scope_closure_label_zh_cn(payload['scope_closure_status'])}`",
-        ]
-    )
-    if payload["workflow_review_summary"]:
-        lines.append(f"- **二轮复核摘要：** {maybe_redact(localize_auto_text_zh_cn(payload['workflow_review_summary']))}")
-    if payload["timeline_review_status"] == "normalized_window_present":
-        lines.append(
-            f"- **时间线说明：** 已恢复可用 UTC 序列，当前事件跨度约 `{payload['timeline_span_minutes']}` 分钟。主机侧可用于排序，但仍不能自动代表入口链完整。"
-        )
-    elif payload["timeline_review_summary"]:
-        lines.append(f"- **时间线说明：** {maybe_redact(localize_auto_text_zh_cn(payload['timeline_review_summary']))}")
-    if payload["scope_closure_status"] == "host_only_scope_sufficient_for_requested_focus":
-        lines.append("- **范围说明：** 当前主机侧证据已可支撑本轮指定范围，无强制性外部补证门槛。")
-    elif payload["scope_external_pivots"]:
-        lines.append(
-            f"- **范围说明：** 当前主机侧证据不足以闭合本轮范围，仍有 `{len(payload['scope_external_pivots'])}` 项外部或跨主机支点待补证。"
-        )
-    elif payload["scope_closure_summary"]:
-        lines.append(f"- **范围说明：** {maybe_redact(localize_auto_text_zh_cn(payload['scope_closure_summary']))}")
-    if payload["scope_external_pivots"]:
-        lines.append("- **必须补做的外部或跨主机支点：**")
-        for item in payload["scope_external_pivots"]:
-            pivot_id = str(item.get("id", "")).strip()
-            reason = str(item.get("reason", "")).strip()
-            lines.append(
-                f"  - `{second_pass_pivot_label_zh_cn(pivot_id)}`：{maybe_redact(localize_auto_text_zh_cn(reason) if reason else '-')}"
-            )
-    if payload["workflow_closure_notes"]:
-        lines.append("- **闭环备注：**")
-        for item in payload["workflow_closure_notes"]:
-            lines.append(f"  - {maybe_redact(localize_auto_text_zh_cn(item))}")
-    lines.extend(["", "## 🔗 必要证据摘录"])
-    evid_idx = ctx["evid_idx"]
-    if payload["evidence_excerpt_ids"]:
-        for evid in payload["evidence_excerpt_ids"]:
-            item = as_dict(evid_idx.get(evid))
-            if not item:
-                continue
-            excerpt = artifact_excerpt(item, max_lines=2)
-            lines.append(f"- **{evid}** 来源=`{sanitize_report_text(str(item.get('source', 'unknown')) or 'unknown', redact)}` 命令=`{sanitize_report_text(compact_text(str(item.get('command', '') or '-'), max_len=120), redact)}`")
+            excerpt = artifact_excerpt(item, max_lines=8, max_chars=260)
             if excerpt:
-                for part in excerpt:
-                    lines.append(f"  - {sanitize_report_text(part, redact)}")
+                lines.extend(sanitize_report_text(part, redact) for part in excerpt)
+            else:
+                lines.append("当前案件包中未保留可直接摘录的原始输出。")
+            lines.extend(["```", ""])
+
+        lines.extend(["## 受波及 IP"])
+        ip_entries = leadership_ip_entries(ctx, payload)
+        if ip_entries:
+            for item in ip_entries:
+                lines.append(
+                    f"- `{sanitize_report_text(item['ip'], redact)}`：{sanitize_report_text(item['reason_zh'], redact)}"
+                )
+        else:
+            lines.append("- 当前主机可见性范围内未恢复出更多受波及或关联 IP。")
+        lines.append("")
+
+        lines.extend(["## 当前外联与保守疑似横向目标"])
+        lines.extend(render_lateral_review_lines_zh_cn(ctx["scene_reconstruction"], maybe_redact))
+        lines.append("")
+
+        lines.extend(["## 隐藏进程与伪装运行体异常"])
+        lines.extend(render_hidden_process_review_lines_zh_cn(ctx["scene_reconstruction"], maybe_redact))
+        lines.append("")
+
+    lines.append("## 可疑文件与哈希")
+    file_entries = leadership_file_entries(payload, limit=8)
+    if file_entries:
+        for item in file_entries:
+            lines.append(
+                f"- 路径=`{sanitize_report_text(str(item.get('path', '') or '-'), redact)}` | "
+                f"sha256=`{sanitize_report_text(str(item.get('sha256', '') or '未获取'), redact)}` | "
+                f"作用判断=`{leadership_file_role_label_zh_cn(str(item.get('role_inference', 'unknown')) )}` | "
+                f"依据=`{sanitize_report_text(str(item.get('basis', '') or '未知'), redact)}`"
+            )
     else:
-        lines.append("- 本轮未选出可摘录证据。")
+        lines.append("- 当前视野内未恢复出可疑路径与哈希配对结果。")
 
     lines.extend(
         [
             "",
-            "## ✅ 处置建议（可直接给执行人员）",
-            "1. 先保现场，禁止未经审批直接杀进程、删文件、停服务或重启。",
-            "2. 若主机承载业务，优先通过可回滚的网络侧手段限制异常外联，而不是直接做破坏性主机操作。",
-            "3. 立即补拉外部证据：堡垒机/VPN/IdP 登录日志、边界防火墙/NAT/DNS、云审计、Kubernetes 审计。",
-            "4. 对可能涉及的口令、密钥、令牌做轮换或吊销，尤其是能够解释本次入口的那一类凭据。",
-            "5. 将本报告列出的可疑文件路径和哈希送去做威胁情报、软件包归属和基线对照，不要只凭文件名判断。",
-            "6. 若已确认存在挖矿运行体，再制定可回滚的隔离和清理方案，覆盖进程、持久化、凭据和业务恢复验证。",
-            "7. 若横向渗透存在可能，继续排查本报告提到的内网来源 IP、跳板机、管理节点和同网段主机。",
+            "## 处置建议",
+            "1. 先保现场，继续保持只读，不要在未单独审批前执行杀进程、删文件、停服务或重启。",
+            "2. 若主机承载业务，优先通过可回滚的网络侧手段限制异常外联，不要直接做破坏性主机操作。",
+            "3. 立即补拉主机外证据：堡垒机、VPN、身份系统、边界防火墙、DNS、云审计与容器审计。",
+            "4. 将本报告列出的可疑路径和哈希送去做威胁情报、软件包归属和基线对照，再决定是否进入处置步骤。",
+            "5. 对可能解释入口的口令、密钥和令牌做轮换或吊销，但要纳入单独的变更审批流程。",
             "",
-            "## ℹ️ 使用说明",
-            "- 本报告区分观测事实与推断，不会补写证据里不存在的步骤。",
-            "- 任何状态变更操作仍需明确审批和业务影响评估。",
-            "",
+            "## 仍待补证与判断边界",
+            "- 仅凭当前主机侧证据，仍无法完成攻击者归因。",
         ]
     )
+    if not ctx["collection_failed"]:
+        entry_items = leadership_entry_items(payload, limit=1)
+        if entry_items:
+            lines.append(f"- 现阶段最优先的进入路径假设是：{sanitize_report_text(str(entry_items[0].get('label_zh', '')).strip(), redact)}")
+        lines.append(f"- {sanitize_report_text(leadership_log_status_summary_zh_cn(payload), redact)}")
+    timeline_gap = public_timeline_gap_summary_zh_cn(payload)
+    if timeline_gap:
+        lines.append(f"- {sanitize_report_text(timeline_gap, redact)}")
+    scope_gap = public_scope_gap_summary_zh_cn(payload)
+    if scope_gap:
+        lines.append(f"- {sanitize_report_text(scope_gap, redact)}")
+    if safe_int(payload.get("log_risk_count", 0)) > 0:
+        lines.append(f"- {sanitize_report_text(leadership_log_status_summary_zh_cn(payload), redact)}")
     return "\n".join(lines).strip() + "\n"
 
 
@@ -3533,7 +3888,7 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
         return zh_report_text(value, redact)
 
     def zh_evidence_refs(values: list[Any]) -> str:
-        return evidence_reference_list_zh_cn(values, ctx["evid_idx"], case_dir).replace("](#evidence-", "](./report.zh-CN.md#evidence-")
+        return evidence_reference_list_zh_cn(values, ctx["evid_idx"], case_dir)
 
     def claim_type_label_zh_cn(value: str) -> str:
         return {
@@ -3627,7 +3982,7 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
     lines: list[str] = [anchor_tag("report-top"), f"# {ctx['title']} - 中文全量报告", ""]
     if case_dir:
         lines.extend([
-            "[案件索引](./reports/index.zh-CN.md) | [英文全量报告](./report.md) | [管理摘要](./reports/management-summary.zh-CN.md) | [SOC 摘要](./reports/soc-summary.zh-CN.md)",
+            "[领导报告](./leadership-report.md) | [操作简报](./reports/operator-brief.md) | [外部补证清单](./reports/external-evidence-checklist.md)",
             "",
         ])
     lines.extend([
@@ -3655,6 +4010,8 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
         "- [结论与研判](#report-findings)",
         "- [时间线](#report-timeline)",
         "- [IP 溯源](#report-ip-traceability)",
+        "- [外联与横向目标复核](#report-lateral-review)",
+        "- [隐藏进程与伪装运行体复核](#report-hidden-process-review)",
         "- [日志完整性](#report-log-integrity)",
         "- [动作记录](#report-action-log)",
         "- [证据详情](#report-evidence-details)",
@@ -3900,6 +4257,14 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
     else:
         lines.extend(["未提供 IP 溯源条目。", ""])
 
+    lines.extend([anchor_tag("report-lateral-review"), "## 外联与横向目标复核"])
+    lines.extend(render_lateral_review_lines_zh_cn(scene_reconstruction, maybe_redact, evidence_refs=zh_evidence_refs))
+    lines.append("")
+
+    lines.extend([anchor_tag("report-hidden-process-review"), "## 隐藏进程与伪装运行体复核"])
+    lines.extend(render_hidden_process_review_lines_zh_cn(scene_reconstruction, maybe_redact, evidence_refs=zh_evidence_refs))
+    lines.append("")
+
     lines.append(anchor_tag("report-log-integrity"))
     lines.append("## 日志完整性")
     if ctx["log_integrity"]:
@@ -3963,7 +4328,7 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
                 lines.append(f"- **产物文件：** [{artifact_name}]({href})")
             if artifact_path:
                 lines.append(f"- **产物路径：** `{maybe_redact(artifact_path)}`")
-            lines.append("- **导航：** [返回证据来源导航](#report-evidence-source-navigator) | [返回证据索引](#report-evidence-index) | [返回顶部](#report-top) | [案件索引](./reports/index.zh-CN.md) | [英文全量报告](./report.md)")
+            lines.append("- **导航：** [返回证据来源导航](#report-evidence-source-navigator) | [返回证据索引](#report-evidence-index) | [返回顶部](#report-top) | [领导报告](./leadership-report.md) | [操作简报](./reports/operator-brief.md)")
             lines.extend([
                 "",
                 "**命令**",
@@ -4003,7 +4368,7 @@ def build_report_zh_cn(data: dict[str, Any], redact: bool, strict: bool, case_di
     lines.extend([
         "",
         "## 页脚",
-        "- [返回顶部](#report-top) | [案件索引](./reports/index.zh-CN.md) | [英文全量报告](./report.md) | [管理摘要](./reports/management-summary.zh-CN.md) | [SOC 摘要](./reports/soc-summary.zh-CN.md)",
+        "- [返回顶部](#report-top) | [领导报告](./leadership-report.md) | [操作简报](./reports/operator-brief.md) | [外部补证清单](./reports/external-evidence-checklist.md)",
         "",
     ])
     return "\n".join(lines).strip() + "\n", warnings
@@ -4018,24 +4383,26 @@ def write_companion_reports(case_dir: str | None, data: dict[str, Any], redact: 
     meta_dir = case_root / "meta"
     reports_dir.mkdir(parents=True, exist_ok=True)
     meta_dir.mkdir(parents=True, exist_ok=True)
-    report_zh, _ = build_report_zh_cn(data, redact=redact, strict=strict, case_dir=case_dir)
-    leadership_en = build_leadership_report(data, redact=redact, case_dir=case_dir)
     leadership_zh = build_leadership_report_zh_cn(data, redact=redact, case_dir=case_dir)
-    legacy_paths = [reports_dir / "report.md", reports_dir / "report.zh-CN.md"]
+    legacy_paths = [
+        reports_dir / "report.md",
+        reports_dir / "report.zh-CN.md",
+        reports_dir / "index.md",
+        reports_dir / "index.zh-CN.md",
+        reports_dir / "management-summary.md",
+        reports_dir / "management-summary.zh-CN.md",
+        reports_dir / "soc-summary.md",
+        reports_dir / "soc-summary.zh-CN.md",
+        reports_dir / "operator-brief.zh-CN.md",
+        case_root / "report.zh-CN.md",
+        case_root / "leadership-report.zh-CN.md",
+    ]
     for legacy_path in legacy_paths:
         if legacy_path.exists():
             legacy_path.unlink()
 
     outputs = {
-        reports_dir / "index.md": build_case_bundle_index(data, case_dir=case_dir),
-        reports_dir / "index.zh-CN.md": finalize_zh_markdown(build_case_bundle_index_zh_cn(data, case_dir=case_dir)),
-        reports_dir / "management-summary.md": build_management_view(data, redact=redact, case_dir=case_dir),
-        reports_dir / "management-summary.zh-CN.md": finalize_zh_markdown(build_management_view_zh_cn(data, redact=redact, case_dir=case_dir)),
-        reports_dir / "soc-summary.md": build_soc_view(data, redact=redact, case_dir=case_dir),
-        reports_dir / "soc-summary.zh-CN.md": finalize_zh_markdown(build_soc_view_zh_cn(data, redact=redact, case_dir=case_dir)),
-        case_root / "leadership-report.md": leadership_en,
-        case_root / "leadership-report.zh-CN.md": finalize_zh_markdown(leadership_zh),
-        case_root / "report.zh-CN.md": finalize_zh_markdown(report_zh),
+        case_root / "leadership-report.md": finalize_zh_markdown(leadership_zh),
     }
     written: list[str] = []
     for out_path, body in outputs.items():
@@ -4044,17 +4411,8 @@ def write_companion_reports(case_dir: str | None, data: dict[str, Any], redact: 
     required_outputs = sorted(
         {
             str(case_root / "report.md"),
-            str(case_root / "report.zh-CN.md"),
             str(case_root / "leadership-report.md"),
-            str(case_root / "leadership-report.zh-CN.md"),
-            str(reports_dir / "index.md"),
-            str(reports_dir / "index.zh-CN.md"),
-            str(reports_dir / "management-summary.md"),
-            str(reports_dir / "management-summary.zh-CN.md"),
-            str(reports_dir / "soc-summary.md"),
-            str(reports_dir / "soc-summary.zh-CN.md"),
             str(reports_dir / "operator-brief.md"),
-            str(reports_dir / "operator-brief.zh-CN.md"),
             str(reports_dir / "operator-brief.json"),
             str(reports_dir / "external-evidence-checklist.md"),
         }
@@ -4114,7 +4472,7 @@ def main() -> int:
     derived_case_dir = args.case_dir
     if not derived_case_dir and input_path.resolve().parent.name == "evidence":
         derived_case_dir = str(input_path.resolve().parent.parent)
-    report_md, warnings = build_report(data, redact=args.redact, strict=args.strict, case_dir=derived_case_dir)
+    report_md, warnings = build_report_zh_cn(data, redact=args.redact, strict=args.strict, case_dir=derived_case_dir)
     written_report_paths: list[Path] = []
     for report_path in report_output_targets(output_path, derived_case_dir):
         report_path.parent.mkdir(parents=True, exist_ok=True)

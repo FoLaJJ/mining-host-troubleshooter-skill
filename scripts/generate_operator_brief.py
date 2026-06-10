@@ -45,7 +45,7 @@ def evidence_links(evidence_ids: list[Any], limit: int = 4) -> str:
         evid = str(item).strip()
         if not evid:
             continue
-        refs.append(f"[{evid}](../report.zh-CN.md#evidence-{evid.lower()})")
+        refs.append(f"[{evid}](../report.md#evidence-{evid.lower()})")
     if not refs:
         return "-"
     suffix = f"（另 {len(evidence_ids) - limit} 项）" if len(evidence_ids) > limit else ""
@@ -244,8 +244,8 @@ def build_zh_md(payload: dict[str, Any], expected_workload: str) -> str:
         [
             "",
             "## 你接下来应该做什么",
-            "1. 先看 `../report.zh-CN.md` 的“假设-证据关联矩阵”，确认哪些是假设已被证据支持。",
-            "2. 再看 `./soc-summary.zh-CN.md`，按证据 ID 逐条复核关键线索。",
+            "1. 先看 `../leadership-report.md`，快速确认当前结论、关键证据和建议处置方向。",
+            "2. 再看 `../report.md`，按证据链、时间线和原始片段完成复核。",
             "3. 如需执行处置（停服务/杀进程/删文件），先做业务影响评估并单独审批。",
             "",
             "## 重要提醒",
@@ -338,16 +338,17 @@ def main() -> int:
     payload = build_brief_payload(data)
     expected_workload = str(data.get("expected_workload", "")).strip()
 
-    zh_path = reports_dir / "operator-brief.zh-CN.md"
-    en_path = reports_dir / "operator-brief.md"
+    zh_path = reports_dir / "operator-brief.md"
     json_path = reports_dir / "operator-brief.json"
 
+    legacy_zh_path = reports_dir / "operator-brief.zh-CN.md"
+    if legacy_zh_path.exists():
+        legacy_zh_path.unlink()
+
     zh_path.write_text(build_zh_md(payload, expected_workload), encoding="utf-8")
-    en_path.write_text(build_en_md(payload, expected_workload), encoding="utf-8")
     json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"Operator brief (ZH) written: {zh_path}")
-    print(f"Operator brief (EN) written: {en_path}")
+    print(f"Operator brief written: {zh_path}")
     print(f"Operator brief (JSON) written: {json_path}")
     return 0
 

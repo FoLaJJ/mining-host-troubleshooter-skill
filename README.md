@@ -106,42 +106,36 @@ python scripts/generate_reports_from_bundle.py --case-dir .
     |-- artifacts/
     |-- evidence/
     |-- leadership-report.md
-    |-- leadership-report.zh-CN.md
     |-- meta/
     |   `-- report-manifest.json
     |-- report.md
-    |-- report.zh-CN.md
     `-- reports/
         |-- external-evidence-checklist.md
-        |-- index.md
-        |-- index.zh-CN.md
-        |-- management-summary.md
-        |-- management-summary.zh-CN.md
-        |-- soc-summary.md
-        |-- soc-summary.zh-CN.md
         |-- operator-brief.md
-        |-- operator-brief.zh-CN.md
         `-- operator-brief.json
 ```
 
 固定输出约束：
 
 - 成功导出时，以上文件集合必须齐全；缺少任意核心文件都应视为导出失败，而不是“部分成功”。
-- `leadership-report.zh-CN.md` / `leadership-report.md` 是单文件汇总件，不需要再跳转其它文件即可了解案件全貌、关键证据和处置建议。
+- 公开交付产物已经改为**中文单轨**，文件名不再带 `zh-CN` 后缀。
+- `leadership-report.md` 是给领导或复核人的单文件汇总件，不需要再跳转其它文件即可了解案件全貌、关键证据和处置建议。
 - `meta/report-manifest.json` 会记录本次应存在的固定产物清单，便于核对交付完整性。
+- 即使远程采集失败，也应在当前案件目录内落下 `failure bundle`、`report.md`、`leadership-report.md`、`reports/operator-brief.md` 和 `reports/external-evidence-checklist.md`，不能因为一条登录链路失败就什么都不产出。
 
 建议阅读顺序：
 
-1. `leadership-report.zh-CN.md`
-2. `reports/management-summary.zh-CN.md` 或 `reports/soc-summary.zh-CN.md`
-3. `report.zh-CN.md`
-4. `reports/index.zh-CN.md`
+1. `leadership-report.md`
+2. `report.md`
+3. `reports/operator-brief.md`
+4. `reports/external-evidence-checklist.md`
 
 其中：
 
-- `leadership-report.zh-CN.md`：给领导或复核人直接阅读的独立汇总件，采用“结论 -> 发现过程 -> 受波及 IP -> 可疑文件与哈希 -> 处置建议”的案件报告结构，内联必要命令和关键证据片段。
-- `report.zh-CN.md`：完整证据报告，保留证据编号、证据链、跳转和详细上下文。
-- `reports/operator-brief.zh-CN.md`：给非安全同学执行落地动作时参考的简报。
+- `leadership-report.md`：给领导或复核人直接阅读的独立汇总件，采用“结论 -> 发现过程 -> 受波及 IP -> 可疑文件与哈希 -> 处置建议”的案件报告结构，内联必要命令和关键证据片段。
+- `report.md`：完整证据报告，保留证据编号、证据链、时间线、横向目标复核、隐藏进程复核和详细上下文。
+- `reports/operator-brief.md`：给非安全同学执行落地动作时参考的简报，默认也是中文。
+- `reports/external-evidence-checklist.md`：明确告诉使用者当前还缺哪些主机外证据，避免主机侧线索被误写成闭环事实。
 
 ## 项目结构与文件职责
 
@@ -188,10 +182,12 @@ python scripts/generate_reports_from_bundle.py --case-dir .
 - `scripts/run_readonly_workflow.py`：主编排器，串起采集、富化、校验、导出。
 - `scripts/collect_live_evidence.py`：多路径只读采集（本地/远程、命令降级、超时控制）。
 - `scripts/enrich_case_evidence.py`：证据关联、时间线重建、假设矩阵生成。
+- `scripts/enrich_case_evidence.py` 现在还会补 `auth_attack_review`、`lateral_movement_review`、`hidden_process_review`，用于保守横向目标判断和隐藏进程复核。
 - `scripts/review_case_evidence.py`：二轮复核层，专门处理时间线质量、范围闭环、发行版日志布局、误报风险和外部补证支点。
-- `scripts/export_investigation_report.py`：导出中英文主报告与分层摘要。
+- `scripts/export_investigation_report.py`：导出当前中文单轨公开报告，固定产出 `report.md` 与 `leadership-report.md`。
 - `scripts/nl_control.py`：自然语言请求解析与参数映射。
-- `scripts/generate_operator_brief.py`：面向非安全同学的简报生成。
+- `scripts/generate_operator_brief.py`：面向非安全同学的中文简报生成。
+- `scripts/generate_reports_from_bundle.py`：仅根据当前案件目录里的现有证据重新生成报告，不重新登录主机、不重新采集。
 - `scripts/command_guard.py`：危险命令门禁与审批约束。
 - `references/`：排查手册、降级策略、兼容性与维护规范。
 - `references/harness-discipline.md`：给弱模型或复杂现场使用的证据关联护栏，强制区分主结论与待证实线索。

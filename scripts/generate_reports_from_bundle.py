@@ -260,7 +260,7 @@ def main() -> int:
     write_checkpoint(
         str(case_dir),
         "operator_brief_complete",
-        extra={"brief_path": str(case_dir / "reports" / "operator-brief.zh-CN.md")},
+        extra={"brief_path": str(case_dir / "reports" / "operator-brief.md")},
     )
 
     run_required_step(
@@ -300,8 +300,8 @@ def main() -> int:
         status="degraded" if degraded else "completed",
         note=failure.get("reason", "") if degraded else "",
         extra={
-            "leadership_report_path": str(case_dir / "leadership-report.zh-CN.md"),
-            "report_path": str(case_dir / "report.zh-CN.md"),
+            "leadership_report_path": str(case_dir / "leadership-report.md"),
+            "report_path": str(case_dir / "report.md"),
         },
     )
     write_checkpoint(
@@ -325,12 +325,9 @@ def main() -> int:
     print(f"[DONE] Case dir: {case_dir}")
     print(f"[DONE] Evidence: {evidence_for_export}")
     print(f"[DONE] Report: {case_dir / 'report.md'}")
-    print(f"[DONE] Chinese Report: {case_dir / 'report.zh-CN.md'}")
     print(f"[DONE] Leadership Report: {case_dir / 'leadership-report.md'}")
-    print(f"[DONE] Leadership Report (ZH): {case_dir / 'leadership-report.zh-CN.md'}")
     print(f"[DONE] External Evidence Checklist: {case_dir / 'reports' / 'external-evidence-checklist.md'}")
-    print(f"[DONE] Operator Brief (ZH): {case_dir / 'reports' / 'operator-brief.zh-CN.md'}")
-    print(f"[DONE] Operator Brief (EN): {case_dir / 'reports' / 'operator-brief.md'}")
+    print(f"[DONE] Operator Brief: {case_dir / 'reports' / 'operator-brief.md'}")
     print(f"[DONE] Report Manifest: {case_dir / 'meta' / 'report-manifest.json'}")
     return 0
 

@@ -33,8 +33,8 @@ class ExportExternalEvidenceChecklistTests(unittest.TestCase):
         }
 
         body = export_external_evidence_checklist.build_checklist(data)
-        self.assertIn("timeline_window_narrow", body)
-        self.assertIn("Expand the time window using upstream telemetry", body)
+        self.assertIn("时间线窗口偏窄", body)
+        self.assertIn("先用上游遥测和历史记录扩展时间窗", body)
         self.assertIn("Recovered event timing is incomplete for confident ingress reconstruction.", body)
 
     def test_checklist_highlights_collection_failure(self) -> None:
@@ -49,7 +49,7 @@ class ExportExternalEvidenceChecklistTests(unittest.TestCase):
         }
 
         body = export_external_evidence_checklist.build_checklist(data)
-        self.assertIn("Collection failure", body)
+        self.assertIn("采集失败概况", body)
         self.assertIn("Remote command channel unavailable before collection.", body)
 
 

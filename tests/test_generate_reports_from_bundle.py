@@ -188,6 +188,36 @@ class GenerateReportsFromBundleTests(unittest.TestCase):
             self.assertEqual(started[0]["extra"]["input_kind"], "failure_bundle")
             self.assertEqual(checkpoints["latest"]["stage"], "report_regeneration_completed")
 
+    def test_report_regeneration_checkpoint_paths_follow_chinese_single_track_contract(self) -> None:
+        generate_reports_from_bundle = self.load_module()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            case_dir = Path(tmp) / "case"
+            evidence_dir = case_dir / "evidence"
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            reviewed = evidence_dir / "evidence.reviewed.json"
+            reviewed.write_text(json.dumps({"second_pass_review": {"status": "completed"}}), encoding="utf-8")
+
+            def fake_run_step(name: str, cmd: list[str]) -> tuple[int, str]:
+                return 0, "{}"
+
+            argv = ["generate_reports_from_bundle.py", "--case-dir", str(case_dir)]
+            with (
+                patch.object(sys, "argv", argv),
+                patch.object(generate_reports_from_bundle, "run_step", side_effect=fake_run_step),
+                patch.object(generate_reports_from_bundle, "verify_expected_report_outputs"),
+            ):
+                rc = generate_reports_from_bundle.main()
+
+            self.assertEqual(rc, 0)
+            checkpoints = json.loads((case_dir / "meta" / "workflow_checkpoints.json").read_text(encoding="utf-8"))
+            history = checkpoints["history"]
+            brief_entry = next(item for item in history if item["stage"] == "operator_brief_complete")
+            response_entry = next(item for item in history if item["stage"] == "approval_gated_response_plan_complete")
+            self.assertEqual(brief_entry["extra"]["brief_path"], str(case_dir / "reports" / "operator-brief.md"))
+            self.assertEqual(response_entry["extra"]["leadership_report_path"], str(case_dir / "leadership-report.md"))
+            self.assertEqual(response_entry["extra"]["report_path"], str(case_dir / "report.md"))
+
     def test_missing_supported_evidence_json_fails_clearly(self) -> None:
         generate_reports_from_bundle = self.load_module()
 
