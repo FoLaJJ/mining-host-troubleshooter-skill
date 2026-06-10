@@ -15,6 +15,7 @@ evidence*.json
 reports/*
 !reports/.gitkeep
 /*-20??????-??????/
+docs/superpowers/
 
 # Keep repository docs
 !README.md

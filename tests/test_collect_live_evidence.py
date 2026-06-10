@@ -58,6 +58,56 @@ class CollectLiveEvidenceTests(unittest.TestCase):
             "Running service collection should appear once in the readonly probe set.",
         )
 
+    def test_network_probes_include_established_non_loopback_and_listening_views(self) -> None:
+        network_commands = [
+            probe.command
+            for probe in collect_live_evidence.BASE_PROBES
+            if probe.source == "network"
+        ]
+        self.assertTrue(
+            any("state established" in command for command in network_commands),
+            "Readonly network coverage should include an established-session view.",
+        )
+        self.assertTrue(
+            any("127.0.0.1\\|::1" in command for command in network_commands),
+            "Established-session collection should explicitly filter loopback-only noise.",
+        )
+        self.assertTrue(
+            any(
+                token in command
+                for command in network_commands
+                for token in ("ss -lntup", "netstat -lntup", "lsof -nPiTCP -sTCP:LISTEN")
+            ),
+            "Readonly network coverage should include a listening-socket view.",
+        )
+
+    def test_auth_probes_include_current_session_activity_views(self) -> None:
+        auth_commands = [
+            probe.command
+            for probe in collect_live_evidence.BASE_PROBES
+            if probe.source == "auth"
+        ]
+        self.assertTrue(
+            any("who -a" in command for command in auth_commands),
+            "Readonly auth coverage should include current session enumeration.",
+        )
+        self.assertTrue(
+            any("loginctl list-sessions" in command for command in auth_commands),
+            "Readonly auth coverage should inspect loginctl session state when available.",
+        )
+        self.assertTrue(
+            any("grep '[s]shd'" in command for command in auth_commands),
+            "Readonly auth coverage should correlate current sshd processes.",
+        )
+
+    def test_gitignore_excludes_superpowers_docs(self) -> None:
+        gitignore_text = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
+        self.assertIn(
+            "docs/superpowers/",
+            gitignore_text,
+            "Superpowers design/planning docs should stay out of version control.",
+        )
+
     def test_transport_negotiation_stops_after_auth_failure(self) -> None:
         attempts = []
 
