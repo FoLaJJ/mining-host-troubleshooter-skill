@@ -43,6 +43,23 @@ You can add control constraints directly in plain language:
 - "Only investigate intrusion. Do not move into remediation."
 - "Only assess local-privesc exposure and traces. Stay read-only."
 
+## Regenerate Reports From Existing Evidence
+
+This is an **explicit mode**. The skill should only use it when the operator clearly asks for behavior such as "generate reports from existing evidence" or "resume report generation from this case bundle".
+
+Default command:
+
+```bash
+python scripts/generate_reports_from_bundle.py --case-dir .
+```
+
+Rules for this mode:
+
+- `--case-dir` defaults to the current directory, and that directory must already be an existing case bundle.
+- The script only uses evidence already present under the bundle's `evidence/` directory. It does not reconnect to the host and does not recollect.
+- Even if the current directory already contains `artifacts/`, `evidence/`, or `meta/`, generic requests such as "investigate", "check whether it was breached", or "collect evidence" must **not** switch into regeneration mode automatically. Those requests must still stay on the normal collection workflow.
+- If export was interrupted, regeneration rebuilds the full fixed report set instead of only filling one missing file.
+
 ## Internal Investigation Flow
 
 1. **Trust Bootstrap**: verify target identity and SSH trust chain.
@@ -71,7 +88,7 @@ You can add control constraints directly in plain language:
 - Runs a second-pass review before final reporting so current operator sessions, vendor-managed startup lines, distro-inapplicable log paths, and mere vulnerability exposure do not get overstated as attacker behavior.
 - Produces explicit external-evidence and cross-host pivots when host-only evidence is not enough to close ingress, lateral-movement, or attribution gaps.
 - Surfaces runtime profile highlights at the beginning of reports to reduce manual triage time.
-- Forces a leadership-facing conclusion matrix near the top of the standalone report, split into observed fact / inference / attribution with confidence labels.
+- Uses a single-file case-report format for leadership review: a natural-language conclusion first, followed by step-by-step discovery notes with inline commands, key evidence excerpts, affected IPs, suspicious file hashes, and response guidance.
 
 ## Output Layout
 
@@ -104,7 +121,7 @@ By default, the workflow creates a new case directory under the current working 
 Fixed output contract:
 
 - A successful export must produce the full file set above. Missing any required report is treated as export failure, not partial success.
-- `leadership-report.md` and `leadership-report.zh-CN.md` are standalone review reports that do not require jumping across other files.
+- `leadership-report.md` and `leadership-report.zh-CN.md` are standalone review reports that do not require jumping across other files to understand the case, evidence, or response guidance.
 - `meta/report-manifest.json` records the required output set for completeness checks.
 
 Recommended reading order:
@@ -116,7 +133,7 @@ Recommended reading order:
 
 Roles of the main outputs:
 
-- `leadership-report.md`: single-file review narrative covering suspected ingress path, likely timing, attacker activity, mining details, host state, and response plan.
+- `leadership-report.md`: a single-file case report using the structure "conclusion -> how the conclusion was reached -> affected IPs -> suspicious files and hashes -> recommended response", with inline commands and key evidence excerpts.
 - `report.md`: full evidence report with evidence IDs, traceable links, and detailed context.
 - `reports/operator-brief.md`: short execution-facing brief for non-specialist operators.
 
