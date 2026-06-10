@@ -145,6 +145,29 @@ SOCKETS_CMD = (
     "echo '## proc_unix'; head -n 40 /proc/net/unix 2>/dev/null || true"
 )
 
+ESTABLISHED_SOCKETS_CMD = (
+    "if command -v ss >/dev/null 2>&1; then "
+    "echo '## ss_established'; "
+    "ss -tnp state established 2>/dev/null | grep -v '127.0.0.1\\|::1' || true; "
+    "elif command -v netstat >/dev/null 2>&1; then "
+    "echo '## netstat_established'; "
+    "netstat -tnp 2>/dev/null | awk 'toupper($6)==\"ESTABLISHED\" && $4 !~ /127\\.0\\.0\\.1|::1/ && $5 !~ /127\\.0\\.0\\.1|::1/ {print}' || true; "
+    "elif command -v lsof >/dev/null 2>&1; then "
+    "echo '## lsof_established'; "
+    "lsof -nPiTCP -sTCP:ESTABLISHED 2>/dev/null | grep -v '127.0.0.1\\|::1' || true; "
+    "else echo 'established_socket_tools_missing'; fi"
+)
+
+LISTENING_SOCKETS_CMD = (
+    "if command -v ss >/dev/null 2>&1; then "
+    "echo '## ss_listening'; ss -lntup 2>/dev/null || ss -lnutp 2>/dev/null || true; "
+    "elif command -v netstat >/dev/null 2>&1; then "
+    "echo '## netstat_listening'; netstat -lntup 2>/dev/null || netstat -lntp 2>/dev/null || true; "
+    "elif command -v lsof >/dev/null 2>&1; then "
+    "echo '## lsof_listening'; lsof -nPiTCP -sTCP:LISTEN 2>/dev/null || true; "
+    "else echo 'listening_socket_tools_missing'; fi"
+)
+
 PROCESS_TOP_CMD = (
     "if command -v ps >/dev/null 2>&1; then "
     "ps aux --sort=-%cpu | head -n 80; "
@@ -175,6 +198,21 @@ AUTH_ARTIFACT_STAT_CMD = (
     "/var/log/wtmp* /var/log/btmp* /var/log/lastlog /var/run/utmp 2>/dev/null || true; "
     "stat -c '%n|%F|%s|%Y' /var/log/auth.log /var/log/auth.log.1 /var/log/secure /var/log/syslog "
     "/var/log/messages /var/log/wtmp /var/log/btmp /var/log/lastlog /var/run/utmp 2>/dev/null || true"
+)
+
+SESSION_ACTIVITY_CMD = (
+    "echo '## who_a'; who -a 2>/dev/null || who 2>/dev/null || true; "
+    "echo '## w'; w 2>/dev/null || true; "
+    "if command -v loginctl >/dev/null 2>&1; then "
+    "echo '## loginctl_list'; loginctl list-sessions 2>/dev/null || true; "
+    "echo '## loginctl_users'; loginctl list-users 2>/dev/null || true; "
+    "for sid in $(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}' | head -n 10); do "
+    "[ -n \"$sid\" ] || continue; "
+    "echo \"## session $sid\"; "
+    "loginctl show-session \"$sid\" -p Id -p Name -p User -p Remote -p RemoteHost -p Service -p Type -p Class -p State -p Leader -p TTY 2>/dev/null || true; "
+    "done; "
+    "else echo 'loginctl_missing'; fi; "
+    "echo '## sshd_processes'; ps -ef 2>/dev/null | grep '[s]shd' || true"
 )
 
 RUNNING_SERVICES_CMD = (
@@ -244,7 +282,7 @@ ENVIRONMENT_CONSTRAINTS_CMD = (
 )
 
 TRUST_RESOLUTION_STRUCTURED_CMD = (
-    "for c in ps ss ip journalctl systemctl last lastb sha256sum find grep awk sed; do "
+    "for c in ps ss netstat lsof ip journalctl systemctl who w loginctl last lastb sha256sum find grep awk sed; do "
     "resolved=$(command -v \"$c\" 2>/dev/null || true); "
     "real=''; "
     "[ -n \"$resolved\" ] && real=$(readlink -f \"$resolved\" 2>/dev/null || echo \"$resolved\"); "
@@ -478,13 +516,13 @@ BASE_PROBES = [
     Probe(
         "trust",
         "echo \"PATH=$PATH\"; "
-        "for c in lsattr chattr systemctl ss netstat ip route journalctl ps last lastlog crontab find grep awk sed; do "
+        "for c in lsattr chattr systemctl ss netstat lsof ip route journalctl ps who w loginctl last lastb lastlog crontab find grep awk sed; do "
         "echo \"## $c\"; type -a \"$c\" 2>/dev/null || echo \"$c: not_found\"; "
         "done",
     ),
     Probe(
         "trust",
-        "for c in lsattr chattr systemctl ss ip journalctl ps; do "
+        "for c in lsattr chattr systemctl ss netstat lsof ip journalctl ps who w loginctl; do "
         "p=$(command -v \"$c\" 2>/dev/null || true); "
         "if [ -n \"$p\" ]; then ls -l \"$p\"; fi; "
         "done",
@@ -492,7 +530,7 @@ BASE_PROBES = [
     Probe(
         "trust",
         "if command -v sha256sum >/dev/null 2>&1; then "
-        "for c in lsattr chattr systemctl ss ip journalctl ps; do "
+        "for c in lsattr chattr systemctl ss netstat lsof ip journalctl ps who w loginctl; do "
         "p=$(command -v \"$c\" 2>/dev/null || true); "
         "if [ -n \"$p\" ]; then sha256sum \"$p\"; fi; "
         "done; "
@@ -501,6 +539,8 @@ BASE_PROBES = [
     Probe("trust", TRUST_RESOLUTION_STRUCTURED_CMD),
     Probe("network", NETWORK_IDENTITY_CMD),
     Probe("network", SOCKETS_CMD),
+    Probe("network", ESTABLISHED_SOCKETS_CMD),
+    Probe("network", LISTENING_SOCKETS_CMD),
     Probe("process", PROCESS_TOP_CMD),
     Probe(
         "process",
@@ -526,6 +566,7 @@ BASE_PROBES = [
     Probe("auth", "lastb -Faiwx | head -n 120"),
     Probe("auth", "lastlog | head -n 120"),
     Probe("auth", AUTH_ARTIFACT_STAT_CMD),
+    Probe("auth", SESSION_ACTIVITY_CMD),
     Probe("persistence", "find /etc/systemd/system /lib/systemd/system -maxdepth 2 -type f -name '*.service' -printf '%TY-%Tm-%Td %TH:%TM %p\\n' 2>/dev/null | sort"),
     Probe(
         "persistence",
@@ -627,7 +668,7 @@ DEEP_READONLY_PROBES = [
         "trust",
         "echo '## aliases'; alias 2>/dev/null || true; "
         "echo '## functions'; declare -F 2>/dev/null || true; "
-        "for c in lsattr chattr systemctl ss netstat ip journalctl ps find grep awk sed last lastlog crontab docker; do "
+        "for c in lsattr chattr systemctl ss netstat lsof ip journalctl ps who w loginctl find grep awk sed last lastb lastlog crontab docker; do "
         "echo \"## $c\"; type \"$c\" 2>/dev/null || true; "
         "for p in /usr/bin/$c /bin/$c /usr/sbin/$c /sbin/$c /usr/local/bin/$c; do "
         "[ -e \"$p\" ] && ls -l \"$p\"; "
@@ -636,7 +677,7 @@ DEEP_READONLY_PROBES = [
     ),
     Probe(
         "trust",
-        "for c in lsattr chattr systemctl ss ip journalctl ps docker; do "
+        "for c in lsattr chattr systemctl ss netstat lsof ip journalctl ps who w loginctl docker; do "
         "p=$(command -v \"$c\" 2>/dev/null || true); "
         "[ -n \"$p\" ] || continue; "
         "echo \"## $c $p\"; "

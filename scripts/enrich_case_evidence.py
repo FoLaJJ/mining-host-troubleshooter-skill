@@ -25,6 +25,18 @@ AUTH_CLOSE_RE = re.compile(
     r"(?:^|[\s:])Connection closed by authenticating user (?P<user>\S+) (?P<ip>\d{1,3}(?:\.\d{1,3}){3})\b"
 )
 LISTEN_PORT_RE = re.compile(r"\b(?:LISTEN|UNCONN)\b.*?(\d{1,3}(?:\.\d{1,3}){3}|::|0\.0\.0\.0|\*)[:.](\d{1,5})\b")
+LSOF_LISTEN_PORT_RE = re.compile(r"\bTCP\s+\S+:(?P<port>\d{1,5})\s+\(LISTEN\)\b", re.I)
+SS_ESTABLISHED_RE = re.compile(r"^\s*\d+\s+\d+\s+(?P<local>\S+)\s+(?P<remote>\S+)(?:\s+(?P<proc>.+))?$")
+NETSTAT_ESTABLISHED_RE = re.compile(
+    r"^\s*tcp\S*\s+\d+\s+\d+\s+(?P<local>\S+)\s+(?P<remote>\S+)\s+ESTABLISHED(?:\s+(?P<proc>\S+))?",
+    re.I,
+)
+LSOF_ESTABLISHED_RE = re.compile(
+    r"^(?P<proc>\S+)\s+(?P<pid>\d+)\b.*\bTCP\s+(?P<local>\S+)->(?P<remote>\S+)\s+\(ESTABLISHED\)",
+    re.I,
+)
+SS_PROCESS_RE = re.compile(r'"(?P<proc>[^"]+)",pid=(?P<pid>\d+)')
+NETSTAT_PROCESS_RE = re.compile(r"(?P<pid>\d+)/(?P<proc>\S+)")
 GPU_QUERY_LINE_RE = re.compile(
     r"^\s*(?P<index>\d+)\s*,\s*(?P<name>[^,]+)\s*,\s*(?P<util>[^,]+)\s*,\s*(?P<temp>[^,]+)\s*,\s*(?P<power>[^,]+)\s*,\s*(?P<limit>[^,]+)\s*,\s*(?P<mem_used>[^,]+)\s*,\s*(?P<mem_total>[^,]+)\s*$"
 )
@@ -50,6 +62,7 @@ GREP_CTX_RE = re.compile(r"^(?P<path>[^:\n]+):(?P<line>\d+):(?P<body>.*)$")
 TRUST_RESOLUTION_RE = re.compile(r"^cmd=(?P<cmd>[^|]+)\|resolved=(?P<resolved>[^|]+)\|real=(?P<real>.+)$")
 TRUST_CANDIDATE_RE = re.compile(r"^candidate=(?P<cmd>[^|]+)\|path=(?P<path>[^|]+)\|real=(?P<real>.+)$")
 IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+ANY_IPV4_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
 RUNTIME_HINT_RE = re.compile(
     r"(?:\bxmrig\b|\bgminer\b|\blolminer\b|\btrex\b|\bnbminer\b|\bsrb\b|\bstratum(?:\+|://)?\b|"
     r"--algorithm\b|--algo\b|\bkawpow\b|\brandomx\b|\bethash\b|\betchash\b|"
@@ -161,6 +174,107 @@ def parse_endpoint(value: str) -> tuple[str, str, str]:
         host, port = text.rsplit(":", 1)
     ip = host if IPV4_RE.fullmatch(host) else ""
     return text, host, port if port else ""
+
+
+def parse_socket_address(value: str) -> tuple[str, str]:
+    text = (value or "").strip().strip(",")
+    if not text:
+        return "", ""
+    if text.startswith("[") and "]" in text:
+        host = text[1 : text.index("]")]
+        rest = text[text.index("]") + 1 :]
+        if rest.startswith(":"):
+            return host, rest[1:]
+        return host, ""
+    if ":" in text:
+        host, port = text.rsplit(":", 1)
+        return host, port
+    return text, ""
+
+
+def is_loopback_host(host: str) -> bool:
+    value = (host or "").strip().strip("[]").lower()
+    return value == "::1" or value.startswith("127.") or value.endswith("127.0.0.1") or value == "localhost"
+
+
+def parse_socket_process(value: str) -> tuple[str, str]:
+    text = (value or "").strip()
+    if not text:
+        return "", ""
+    ss_match = SS_PROCESS_RE.search(text)
+    if ss_match:
+        return ss_match.group("pid").strip(), ss_match.group("proc").strip()
+    netstat_match = NETSTAT_PROCESS_RE.search(text)
+    if netstat_match:
+        return netstat_match.group("pid").strip(), netstat_match.group("proc").strip()
+    return "", ""
+
+
+def parse_listening_port_line(line: str) -> str:
+    stripped = line.strip()
+    if not stripped:
+        return ""
+    match = LISTEN_PORT_RE.search(stripped)
+    if match:
+        return match.group(2).strip()
+    lsof_match = LSOF_LISTEN_PORT_RE.search(stripped)
+    if lsof_match:
+        return lsof_match.group("port").strip()
+    return ""
+
+
+def parse_established_connection_line(line: str) -> dict[str, str] | None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("## "):
+        return None
+    if stripped.startswith(("Recv-Q", "Netid", "Proto", "COMMAND")):
+        return None
+
+    match = SS_ESTABLISHED_RE.match(stripped)
+    if match:
+        local_ip, local_port = parse_socket_address(match.group("local"))
+        remote_ip, remote_port = parse_socket_address(match.group("remote"))
+        pid, process = parse_socket_process(match.group("proc") or "")
+    else:
+        match = NETSTAT_ESTABLISHED_RE.match(stripped)
+        if match:
+            local_ip, local_port = parse_socket_address(match.group("local"))
+            remote_ip, remote_port = parse_socket_address(match.group("remote"))
+            pid, process = parse_socket_process(match.group("proc") or "")
+        else:
+            lsof_match = LSOF_ESTABLISHED_RE.search(stripped)
+            if not lsof_match:
+                return None
+            local_ip, local_port = parse_socket_address(lsof_match.group("local"))
+            remote_ip, remote_port = parse_socket_address(lsof_match.group("remote"))
+            pid = lsof_match.group("pid").strip()
+            process = lsof_match.group("proc").strip()
+
+    if not remote_ip or is_loopback_host(local_ip) or is_loopback_host(remote_ip):
+        return None
+    return {
+        "local_ip": local_ip,
+        "local_port": local_port,
+        "remote_ip": remote_ip,
+        "remote_port": remote_port,
+        "pid": pid,
+        "process": process,
+    }
+
+
+def parse_current_session_user(line: str) -> str:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("## "):
+        return ""
+    who_match = re.match(r"^(?P<user>\S+)\s+(?:pts/\S+|tty\S+)\b", stripped)
+    if who_match:
+        return who_match.group("user").strip()
+    loginctl_match = re.match(r"^\d+\s+\d+\s+(?P<user>\S+)\b", stripped)
+    if loginctl_match:
+        return loginctl_match.group("user").strip()
+    if stripped.startswith("Name="):
+        return stripped.split("=", 1)[1].strip()
+    return ""
 
 
 def parse_grep_context_line(line: str) -> tuple[str, str, str]:
@@ -742,12 +856,15 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
     invalid_source_map: dict[str, set[str]] = {}
     closed_source_map: dict[str, set[str]] = {}
     listen_ports: set[str] = set()
+    established_remote_map: dict[str, set[str]] = {}
     trust_flags: set[str] = set()
     ioc_process_lines: list[str] = []
     top_cpu_processes: list[dict[str, Any]] = []
     process_exe_by_pid: dict[str, str] = {}
     process_cmd_by_pid: dict[str, str] = {}
     runtime_profiles: list[dict[str, Any]] = []
+    established_connections: list[dict[str, str]] = []
+    established_connection_keys: set[tuple[str, str, str, str, str, str]] = set()
     fallback_markers: list[str] = []
     fallback_marker_ids: set[str] = set()
     cron_runtime_candidates: list[dict[str, Any]] = []
@@ -800,6 +917,10 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
     auth_failed_event_ids: set[str] = set()
     auth_invalid_event_ids: set[str] = set()
     auth_accepted_event_ids: set[str] = set()
+    current_session_users: set[str] = set()
+    current_session_remote_map: dict[str, set[str]] = {}
+    current_session_samples: list[str] = []
+    current_session_sample_seen: set[str] = set()
 
     def add_timeline(observed_at: str, event: str, source: str, evid_id: str) -> None:
         timeline_add.append(
@@ -890,14 +1011,46 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
                     closed_source_map.setdefault(ip, set()).add(evid_id)
                     add_auth_timeline_once(observed_at, "closed", user, ip, evid_id)
 
-        if source == "network" and ("ss -antup" in command or "netstat -antup" in command):
+            if "who -a" in command_lower or "loginctl list-sessions" in command_lower:
+                for line in stdout.splitlines():
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith("## "):
+                        continue
+                    if stripped in {"USER TTY FROM LOGIN@ IDLE JCPU PCPU WHAT", "SESSION UID USER SEAT TTY"}:
+                        continue
+                    user = parse_current_session_user(stripped)
+                    if user:
+                        current_session_users.add(user)
+                    for ip in ANY_IPV4_RE.findall(stripped):
+                        if not is_loopback_host(ip):
+                            current_session_remote_map.setdefault(ip, set()).add(evid_id)
+                    if stripped not in current_session_sample_seen and len(current_session_samples) < 20:
+                        current_session_sample_seen.add(stripped)
+                        current_session_samples.append(stripped)
+
+        if source == "network":
             for line in stdout.splitlines():
-                m = LISTEN_PORT_RE.search(line)
-                if not m:
-                    continue
-                port = m.group(2)
+                port = parse_listening_port_line(line)
                 if port:
                     listen_ports.add(port)
+                connection = parse_established_connection_line(line)
+                if not connection:
+                    continue
+                key = (
+                    connection.get("local_ip", ""),
+                    connection.get("local_port", ""),
+                    connection.get("remote_ip", ""),
+                    connection.get("remote_port", ""),
+                    connection.get("pid", ""),
+                    connection.get("process", ""),
+                )
+                if key in established_connection_keys:
+                    continue
+                established_connection_keys.add(key)
+                established_connections.append(connection)
+                remote_ip = connection.get("remote_ip", "").strip()
+                if remote_ip:
+                    established_remote_map.setdefault(remote_ip, set()).add(evid_id)
 
         if source == "trust":
             for line in stdout.splitlines():
@@ -1706,6 +1859,26 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
                 "evidence_ids": sorted(ids),
             }
         )
+    for ip, ids in current_session_remote_map.items():
+        ip_trace_add.append(
+            {
+                "ip": ip,
+                "role": "current_session_source",
+                "trace_status": "unknown",
+                "reason": "Observed in current session output only; authorization and upstream attribution are not established in this case.",
+                "evidence_ids": sorted(ids),
+            }
+        )
+    for ip, ids in established_remote_map.items():
+        ip_trace_add.append(
+            {
+                "ip": ip,
+                "role": "established_peer",
+                "trace_status": "unknown",
+                "reason": "Observed as a remote endpoint in the live established socket table only; operator ownership is not established automatically.",
+                "evidence_ids": sorted(ids),
+            }
+        )
 
     gpu_peak_util, gpu_visibility_status, gpu_visibility_summary = gpu_visibility_assessment(
         gpu_utilization_samples,
@@ -1771,6 +1944,13 @@ def enrich(data: dict[str, Any]) -> dict[str, Any]:
             "closed": sorted(closed_source_map),
         },
         "listening_ports": sorted(listen_ports),
+        "established_connection_count": len(established_connections),
+        "established_remote_ips": sorted(established_remote_map),
+        "established_connections": established_connections[:12],
+        "current_session_usernames": sorted(current_session_users),
+        "current_session_remote_ips": sorted(current_session_remote_map),
+        "current_session_sample_count": len(current_session_samples),
+        "current_session_samples": current_session_samples[:12],
         "trust_anomalies": sorted(trust_flags),
         "trust_resolution_map": {
             key: {
