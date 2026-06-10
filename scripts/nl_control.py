@@ -21,6 +21,14 @@ PASS_RE = re.compile(r"(?:\bpassword\b|\bpasswd\b|密码)\s*[:：]?\s*([^\s,，;
 FINGERPRINT_RE = re.compile(r"\bSHA256:[A-Za-z0-9+/=]+\b")
 KEY_RE = re.compile(r"(?:\bidentity\b|\bkey\b|私钥|密钥)\s*[:：]?\s*([^\s,，;；]+)", re.I)
 MUTATION_RE = re.compile(r"(kill|stop|restart|reboot|shutdown|delete|remove|rm\b|truncate|disable|isolate|quarantine|隔离|删除|移除|停服|重启|杀进程)", re.I)
+REPORT_REGENERATION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"根据现有证据生成报告"),
+    re.compile(r"补生成报告"),
+    re.compile(r"不要重新采集[，,]?\s*直接出报告"),
+    re.compile(r"根据现有\s*case bundle\s*生成报告", re.I),
+    re.compile(r"generate reports from existing evidence", re.I),
+    re.compile(r"resume report generation from this case bundle", re.I),
+)
 
 FOCUS_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(被入侵|入侵|侵害|compromise|intrusion|attacker|攻击链|攻击路径|攻击手法)", re.I), "intrusion-review"),
@@ -49,6 +57,10 @@ def detect_focus(req: str) -> list[str]:
     return focus
 
 
+def detect_report_regeneration_intent(req: str) -> bool:
+    return any(pattern.search(req) for pattern in REPORT_REGENERATION_PATTERNS)
+
+
 def parse_request(text: str) -> dict[str, Any]:
     req = " ".join((text or "").split())
     out: dict[str, Any] = {
@@ -62,6 +74,7 @@ def parse_request(text: str) -> dict[str, Any]:
         "redact": False,
         "focus": [],
         "mutation_keywords_detected": False,
+        "report_regeneration_only": False,
     }
     m = USER_HOST_RE.search(req)
     if m:
@@ -97,10 +110,21 @@ def parse_request(text: str) -> dict[str, Any]:
         out["redact"] = True
     out["focus"] = detect_focus(req)
     out["mutation_keywords_detected"] = bool(MUTATION_RE.search(req))
+    out["report_regeneration_only"] = detect_report_regeneration_intent(req)
     return out
 
 
 def build_command(parsed: dict[str, Any], analyst: str, case_root: str, request_summary: str) -> tuple[list[str], dict[str, str]]:
+    env = os.environ.copy()
+    if parsed.get("report_regeneration_only"):
+        script = Path(__file__).resolve().parent / "generate_reports_from_bundle.py"
+        return [
+            sys.executable,
+            str(script),
+            "--case-dir",
+            case_root,
+        ], env
+
     script = Path(__file__).resolve().parent / "run_readonly_workflow.py"
     cmd = [
         sys.executable,
@@ -122,7 +146,6 @@ def build_command(parsed: dict[str, Any], analyst: str, case_root: str, request_
     if parsed.get("redact"):
         cmd.append("--redact")
 
-    env = os.environ.copy()
     remote_user = str(parsed.get("remote_user", "")).strip()
     remote_ip = str(parsed.get("remote_ip", "")).strip()
     if remote_user and remote_ip:
