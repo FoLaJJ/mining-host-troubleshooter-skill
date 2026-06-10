@@ -1,7 +1,5 @@
 # Mining Host Troubleshooter
 
-[English README](README.en.md)
-
 用于 Linux 主机疑似入侵、挖矿木马、持久化与本地提权暴露面的只读排查与溯源技能。
 
 这个仓库是一个 **skill**，不是给用户手工拼脚本参数的命令集合。正常使用方式是让大模型调用 skill，skill 再自动编排脚本执行与报告导出。
@@ -119,6 +117,7 @@ python scripts/generate_reports_from_bundle.py --case-dir .
 
 - 成功导出时，以上文件集合必须齐全；缺少任意核心文件都应视为导出失败，而不是“部分成功”。
 - 公开交付产物已经改为**中文单轨**，文件名不再带 `zh-CN` 后缀。
+- 当前默认流程只生成本节列出的中文单轨公开产物；旧版双轨/多摘要公开产物均已废弃，不属于当前交付结果。
 - `leadership-report.md` 是给领导或复核人的单文件汇总件，不需要再跳转其它文件即可了解案件全貌、关键证据和处置建议。
 - `meta/report-manifest.json` 会记录本次应存在的固定产物清单，便于核对交付完整性。
 - 即使远程采集失败，也应在当前案件目录内落下 `failure bundle`、`report.md`、`leadership-report.md`、`reports/operator-brief.md` 和 `reports/external-evidence-checklist.md`，不能因为一条登录链路失败就什么都不产出。
@@ -139,11 +138,12 @@ python scripts/generate_reports_from_bundle.py --case-dir .
 
 ## 项目结构与文件职责
 
+以下结构以当前主流程和核心脚本为准。
+
 ```text
 .
 |-- SKILL.md
 |-- README.md
-|-- README.en.md
 |-- package.json
 |-- agents/
 |   `-- openai.yaml
@@ -159,16 +159,21 @@ python scripts/generate_reports_from_bundle.py --case-dir .
 |-- scripts/
 |   |-- run_readonly_workflow.py
 |   |-- collect_live_evidence.py
+|   |-- preflight_environment.py
 |   |-- enrich_case_evidence.py
 |   |-- review_case_evidence.py
 |   |-- export_investigation_report.py
+|   |-- export_external_evidence_checklist.py
 |   |-- nl_control.py
 |   |-- generate_operator_brief.py
+|   |-- generate_reports_from_bundle.py
 |   |-- compare_case_bundles.py
 |   |-- generate_host_baseline.py
 |   |-- apply_host_baseline.py
 |   |-- validate_case_bundle.py
 |   |-- command_guard.py
+|   |-- refresh_case_bundle.py
+|   |-- redact_output.py
 |   `-- install-skill.mjs
 `-- reports/
     `-- .gitkeep
