@@ -345,6 +345,24 @@ class GenerateReportsFromBundleTests(unittest.TestCase):
             self.assertIn("does not match", str(ctx.exception))
             self.assertIn("evidence.reviewed.json", str(ctx.exception))
 
+    def test_canonical_filename_with_nonempty_unclassifiable_payload_fails_clearly(self) -> None:
+        generate_reports_from_bundle = self.load_module()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            case_dir = Path(tmp) / "case"
+            evidence_dir = case_dir / "evidence"
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            reviewed = evidence_dir / "evidence.reviewed.json"
+            reviewed.write_text(json.dumps({"foo": "bar"}), encoding="utf-8")
+
+            argv = ["generate_reports_from_bundle.py", "--case-dir", str(case_dir)]
+            with patch.object(sys, "argv", argv):
+                with self.assertRaises(SystemExit) as ctx:
+                    generate_reports_from_bundle.main()
+
+            self.assertIn("does not match", str(ctx.exception))
+            self.assertIn("evidence.reviewed.json", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

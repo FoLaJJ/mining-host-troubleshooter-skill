@@ -64,7 +64,12 @@ def classify_input(path: Path) -> str:
     detected = infer_input_kind(payload)
     expected = canonical_input_kind(path)
     if expected:
-        if detected and detected != expected:
+        if detected is None:
+            raise SystemExit(
+                "Canonical evidence filename/content does not match for "
+                f"{path.name}: expected {expected}, detected unclassifiable payload."
+            )
+        if detected != expected:
             raise SystemExit(
                 "Canonical evidence filename/content does not match for "
                 f"{path.name}: expected {expected}, detected {detected}."
