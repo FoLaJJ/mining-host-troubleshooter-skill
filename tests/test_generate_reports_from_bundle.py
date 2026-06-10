@@ -33,7 +33,10 @@ class GenerateReportsFromBundleTests(unittest.TestCase):
             evidence_dir = case_dir / "evidence"
             evidence_dir.mkdir(parents=True, exist_ok=True)
             reviewed = evidence_dir / "evidence.reviewed.json"
-            reviewed.write_text("{}", encoding="utf-8")
+            reviewed.write_text(
+                json.dumps({"second_pass_review": {"status": "completed"}}),
+                encoding="utf-8",
+            )
             commands = []
 
             def fake_run_step(name: str, cmd: list[str]) -> tuple[int, str]:
@@ -75,7 +78,16 @@ class GenerateReportsFromBundleTests(unittest.TestCase):
             evidence_dir = case_dir / "evidence"
             evidence_dir.mkdir(parents=True, exist_ok=True)
             raw = evidence_dir / "evidence.raw.json"
-            raw.write_text("{}", encoding="utf-8")
+            raw.write_text(
+                json.dumps(
+                    {
+                        "incident": {"id": "INC-1"},
+                        "host": {"name": "host-1"},
+                        "evidence": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
             reviewed_auto = evidence_dir / "evidence.reviewed.auto.json"
             commands = []
 
@@ -190,25 +202,29 @@ class GenerateReportsFromBundleTests(unittest.TestCase):
 
             self.assertIn("No supported evidence JSON", str(ctx.exception))
 
-    def test_explicit_input_override_accepts_noncanonical_case_evidence_name(self) -> None:
+    def test_missing_evidence_directory_fails_clearly(self) -> None:
+        generate_reports_from_bundle = self.load_module()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            case_dir = Path(tmp) / "case"
+            case_dir.mkdir(parents=True, exist_ok=True)
+
+            argv = ["generate_reports_from_bundle.py", "--case-dir", str(case_dir)]
+            with patch.object(sys, "argv", argv):
+                with self.assertRaises(SystemExit) as ctx:
+                    generate_reports_from_bundle.main()
+
+            self.assertIn("Evidence directory not found", str(ctx.exception))
+
+    def test_strict_propagates_to_validate_and_export(self) -> None:
         generate_reports_from_bundle = self.load_module()
 
         with tempfile.TemporaryDirectory() as tmp:
             case_dir = Path(tmp) / "case"
             evidence_dir = case_dir / "evidence"
             evidence_dir.mkdir(parents=True, exist_ok=True)
-            override = case_dir / "custom-reviewed-copy.json"
-            override.write_text(
-                json.dumps(
-                    {
-                        "incident": {"id": "INC-1"},
-                        "host": {"name": "host-1"},
-                        "evidence": [],
-                        "second_pass_review": {"status": "completed"},
-                    }
-                ),
-                encoding="utf-8",
-            )
+            reviewed = evidence_dir / "evidence.reviewed.json"
+            reviewed.write_text(json.dumps({"second_pass_review": {"status": "completed"}}), encoding="utf-8")
             commands = []
 
             def fake_run_step(name: str, cmd: list[str]) -> tuple[int, str]:
@@ -219,8 +235,7 @@ class GenerateReportsFromBundleTests(unittest.TestCase):
                 "generate_reports_from_bundle.py",
                 "--case-dir",
                 str(case_dir),
-                "--input",
-                str(override),
+                "--strict",
             ]
             with (
                 patch.object(sys, "argv", argv),
@@ -230,15 +245,105 @@ class GenerateReportsFromBundleTests(unittest.TestCase):
                 rc = generate_reports_from_bundle.main()
 
             self.assertEqual(rc, 0)
-            self.assertEqual(
-                [name for name, _ in commands],
-                [
-                    "validate_case_bundle",
-                    "generate_operator_brief",
-                    "export_external_evidence_checklist",
-                    "export_investigation_report",
-                ],
+            validate_cmd = next(cmd for name, cmd in commands if name == "validate_case_bundle")
+            export_cmd = next(cmd for name, cmd in commands if name == "export_investigation_report")
+            brief_cmd = next(cmd for name, cmd in commands if name == "generate_operator_brief")
+            checklist_cmd = next(cmd for name, cmd in commands if name == "export_external_evidence_checklist")
+            self.assertIn("--strict", validate_cmd)
+            self.assertIn("--strict", export_cmd)
+            self.assertNotIn("--strict", brief_cmd)
+            self.assertNotIn("--strict", checklist_cmd)
+
+    def test_redact_propagates_to_export_only(self) -> None:
+        generate_reports_from_bundle = self.load_module()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            case_dir = Path(tmp) / "case"
+            evidence_dir = case_dir / "evidence"
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            reviewed = evidence_dir / "evidence.reviewed.json"
+            reviewed.write_text(json.dumps({"second_pass_review": {"status": "completed"}}), encoding="utf-8")
+            commands = []
+
+            def fake_run_step(name: str, cmd: list[str]) -> tuple[int, str]:
+                commands.append((name, cmd))
+                return 0, "{}"
+
+            argv = [
+                "generate_reports_from_bundle.py",
+                "--case-dir",
+                str(case_dir),
+                "--redact",
+            ]
+            with (
+                patch.object(sys, "argv", argv),
+                patch.object(generate_reports_from_bundle, "run_step", side_effect=fake_run_step),
+                patch.object(generate_reports_from_bundle, "verify_expected_report_outputs"),
+            ):
+                rc = generate_reports_from_bundle.main()
+
+            self.assertEqual(rc, 0)
+            validate_cmd = next(cmd for name, cmd in commands if name == "validate_case_bundle")
+            export_cmd = next(cmd for name, cmd in commands if name == "export_investigation_report")
+            brief_cmd = next(cmd for name, cmd in commands if name == "generate_operator_brief")
+            checklist_cmd = next(cmd for name, cmd in commands if name == "export_external_evidence_checklist")
+            self.assertNotIn("--redact", validate_cmd)
+            self.assertNotIn("--redact", brief_cmd)
+            self.assertNotIn("--redact", checklist_cmd)
+            self.assertIn("--redact", export_cmd)
+
+    def test_explicit_input_override_rejects_cross_bundle_evidence(self) -> None:
+        generate_reports_from_bundle = self.load_module()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case_dir = root / "case-a"
+            other_case = root / "case-b"
+            (case_dir / "evidence").mkdir(parents=True, exist_ok=True)
+            other_evidence_dir = other_case / "evidence"
+            other_evidence_dir.mkdir(parents=True, exist_ok=True)
+            override = other_evidence_dir / "evidence.reviewed.json"
+            override.write_text(json.dumps({"second_pass_review": {"status": "completed"}}), encoding="utf-8")
+
+            argv = [
+                "generate_reports_from_bundle.py",
+                "--case-dir",
+                str(case_dir),
+                "--input",
+                str(override),
+            ]
+            with patch.object(sys, "argv", argv):
+                with self.assertRaises(SystemExit) as ctx:
+                    generate_reports_from_bundle.main()
+
+            self.assertIn("must be under", str(ctx.exception))
+
+    def test_canonical_filename_content_mismatch_fails_clearly(self) -> None:
+        generate_reports_from_bundle = self.load_module()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            case_dir = Path(tmp) / "case"
+            evidence_dir = case_dir / "evidence"
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            reviewed = evidence_dir / "evidence.reviewed.json"
+            reviewed.write_text(
+                json.dumps(
+                    {
+                        "incident": {"id": "INC-1"},
+                        "host": {"name": "host-1"},
+                        "evidence": [],
+                    }
+                ),
+                encoding="utf-8",
             )
+
+            argv = ["generate_reports_from_bundle.py", "--case-dir", str(case_dir)]
+            with patch.object(sys, "argv", argv):
+                with self.assertRaises(SystemExit) as ctx:
+                    generate_reports_from_bundle.main()
+
+            self.assertIn("does not match", str(ctx.exception))
+            self.assertIn("evidence.reviewed.json", str(ctx.exception))
 
 
 if __name__ == "__main__":

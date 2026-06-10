@@ -30,21 +30,9 @@ def default_case_dir() -> str:
     return str(Path.cwd().resolve())
 
 
-def classify_input(path: Path) -> str:
-    for input_kind, filename in SUPPORTED_INPUTS:
-        if path.name == filename:
-            return input_kind
-
-    payload = load_optional_json_file(str(path))
-    if not payload:
-        raise SystemExit(
-            "Unsupported evidence JSON for report regeneration: "
-            f"{path}. Supported files are: "
-            + ", ".join(filename for _, filename in SUPPORTED_INPUTS)
-        )
-
-    failure = collection_failure_summary(str(path))
-    if failure.get("status") == "failed":
+def infer_input_kind(payload: dict) -> str | None:
+    failure = payload.get("collection_failure")
+    if isinstance(failure, dict) and str(failure.get("status", "")).strip().lower() == "failed":
         return "failure_bundle"
     if isinstance(payload.get("second_pass_review"), dict):
         return "reviewed"
@@ -54,6 +42,36 @@ def classify_input(path: Path) -> str:
         return "reviewed_auto"
     if any(key in payload for key in ("incident", "host", "evidence", "findings", "timeline")):
         return "raw"
+    return None
+
+
+def canonical_input_kind(path: Path) -> str | None:
+    for input_kind, filename in SUPPORTED_INPUTS:
+        if path.name == filename:
+            return input_kind
+    return None
+
+
+def classify_input(path: Path) -> str:
+    payload = load_optional_json_file(str(path))
+    if not payload:
+        raise SystemExit(
+            "Unsupported evidence JSON for report regeneration: "
+            f"{path}. Supported files are: "
+            + ", ".join(filename for _, filename in SUPPORTED_INPUTS)
+        )
+
+    detected = infer_input_kind(payload)
+    expected = canonical_input_kind(path)
+    if expected:
+        if detected and detected != expected:
+            raise SystemExit(
+                "Canonical evidence filename/content does not match for "
+                f"{path.name}: expected {expected}, detected {detected}."
+            )
+        return expected
+    if detected:
+        return detected
 
     raise SystemExit(
         "Unsupported evidence JSON for report regeneration: "
@@ -63,7 +81,7 @@ def classify_input(path: Path) -> str:
 
 
 def choose_input(case_dir: Path, override: str | None) -> tuple[Path, str]:
-    evidence_dir = case_dir / "evidence"
+    evidence_dir = (case_dir / "evidence").resolve()
     if not evidence_dir.exists() or not evidence_dir.is_dir():
         raise SystemExit(f"Evidence directory not found: {evidence_dir}")
 
@@ -71,12 +89,16 @@ def choose_input(case_dir: Path, override: str | None) -> tuple[Path, str]:
         path = Path(override).resolve()
         if not path.exists() or not path.is_file():
             raise SystemExit(f"Input evidence file not found: {path}")
+        try:
+            path.relative_to(evidence_dir)
+        except ValueError as exc:
+            raise SystemExit(f"Input evidence file must be under {evidence_dir}: {path}") from exc
         return path, classify_input(path)
 
     for input_kind, filename in SUPPORTED_INPUTS:
         candidate = evidence_dir / filename
         if candidate.exists() and candidate.is_file():
-            return candidate, input_kind
+            return candidate, classify_input(candidate)
 
     raise SystemExit(
         "No supported evidence JSON found under "
